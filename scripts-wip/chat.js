@@ -4,7 +4,25 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Firefox Userscript + Page Context PubNub Bridge
+     * ============================================================
+     *
+     * FEATURES
+     *
+     * - Somtoday-style Chat tab
+     * - Chat does NOT automatically open
+     * - Native Somtoday tabs close Chat
+     * - PubNub realtime messaging
+     * - PubNub History / Message Persistence sync
+     * - LocalStorage cache
+     * - Offline recovery
+     * - Automatic deduplication
+     * - Last 100 messages loaded on startup
+     *
+     * IMPORTANT
+     *
+     * PubNub Message Persistence must be enabled for your
+     * PubNub keyset for cross-device history to work.
+     *
      * ============================================================
      */
 
@@ -20,21 +38,30 @@
     // ============================================================
 
     const CONFIG = {
+
         publishKey: "demo",
         subscribeKey: "demo",
 
         pubnubScript:
             "https://cdn.pubnub.com/sdk/javascript/pubnub.10.2.0.min.js",
 
-        channelPrefix: "school",
+        channelPrefix:
+            "school",
 
-        maxMessages: 100,
+        maxMessages:
+            100,
 
-        startupTimeout: 30000,
+        localCacheMessages:
+            100,
 
-        popupDelay: 3000,
+        startupTimeout:
+            30000,
 
-        debug: true
+        syncOnOpen:
+            true,
+
+        debug:
+            true
     };
 
     // ============================================================
@@ -59,11 +86,23 @@
 
     let chatOpen = false;
 
-    let hiddenElements = [];
-
     let observer = null;
 
-    const receivedMessages = [];
+    let pubnubConnected = false;
+
+    let historyLoaded = false;
+
+    let syncRunning = false;
+
+    /*
+     * All messages currently known by this client.
+     *
+     * Map:
+     *
+     * message.id -> message
+     */
+
+    const messageMap = new Map();
 
     // ============================================================
     // LOGGING
@@ -72,6 +111,7 @@
     function log(...args) {
 
         if (CONFIG.debug) {
+
             console.log(
                 "[Somtoday Chat]",
                 ...args
@@ -114,10 +154,11 @@
     function sleep(ms) {
 
         return new Promise(
-            resolve => setTimeout(
-                resolve,
-                ms
-            )
+            resolve =>
+                setTimeout(
+                    resolve,
+                    ms
+                )
         );
     }
 
@@ -138,14 +179,9 @@
                 data
             );
 
-        const hashArray =
-            Array.from(
-                new Uint8Array(
-                    hashBuffer
-                )
-            );
-
-        return hashArray
+        return Array.from(
+            new Uint8Array(hashBuffer)
+        )
             .map(
                 byte =>
                     byte
@@ -156,17 +192,142 @@
     }
 
     // ============================================================
+    // LOCAL CACHE KEY
+    // ============================================================
+
+    function getCacheKey() {
+
+        if (!channel) {
+            return null;
+        }
+
+        return (
+            "somtoday-school-chat:" +
+            String(channel)
+        );
+    }
+
+    // ============================================================
+    // SAVE LOCAL CACHE
+    // ============================================================
+
+    function saveLocalCache() {
+
+        const key =
+            getCacheKey();
+
+        if (!key) {
+            return;
+        }
+
+        try {
+
+            const messages =
+                Array.from(
+                    messageMap.values()
+                )
+                    .sort(
+                        (a, b) =>
+                            Number(a.timestamp) -
+                            Number(b.timestamp)
+                    )
+                    .slice(
+                        -CONFIG.localCacheMessages
+                    );
+
+            localStorage.setItem(
+                key,
+                JSON.stringify(
+                    messages
+                )
+            );
+
+        } catch (err) {
+
+            warn(
+                "Lokale chat-cache opslaan mislukt:",
+                err
+            );
+        }
+    }
+
+    // ============================================================
+    // LOAD LOCAL CACHE
+    // ============================================================
+
+    function loadLocalCache() {
+
+        const key =
+            getCacheKey();
+
+        if (!key) {
+            return;
+        }
+
+        try {
+
+            const raw =
+                localStorage.getItem(
+                    key
+                );
+
+            if (!raw) {
+                return;
+            }
+
+            const messages =
+                JSON.parse(
+                    raw
+                );
+
+            if (
+                !Array.isArray(messages)
+            ) {
+                return;
+            }
+
+            for (
+                const message of messages
+            ) {
+
+                addMessage(
+                    message,
+                    false
+                );
+            }
+
+            log(
+                "Lokale cache geladen:",
+                messages.length,
+                "berichten"
+            );
+
+        } catch (err) {
+
+            warn(
+                "Lokale chat-cache lezen mislukt:",
+                err
+            );
+        }
+    }
+
+    // ============================================================
     // SOMTODAY AUTH
     // ============================================================
 
     function getAuthRecord() {
 
         const keys = [
+
             "CapacitorStorage.SL_AUTH_CONFIG_RECORDS",
+
             "SL_AUTH_CONFIG_RECORDS"
+
         ];
 
-        for (const key of keys) {
+        for (
+            const key of keys
+        ) {
 
             try {
 
@@ -180,7 +341,9 @@
                 }
 
                 const parsed =
-                    JSON.parse(raw);
+                    JSON.parse(
+                        raw
+                    );
 
                 if (
                     parsed &&
@@ -193,7 +356,7 @@
             } catch (err) {
 
                 warn(
-                    "Auth storage lezen mislukt:",
+                    "Auth lezen mislukt:",
                     key,
                     err
                 );
@@ -201,7 +364,7 @@
         }
 
         /*
-         * Fallback: zoek andere auth-items.
+         * Fallback: zoek auth-objecten.
          */
 
         for (
@@ -237,7 +400,9 @@
                 }
 
                 const parsed =
-                    JSON.parse(raw);
+                    JSON.parse(
+                        raw
+                    );
 
                 if (
                     parsed?.currentLeerling ||
@@ -245,7 +410,7 @@
                 ) {
 
                     log(
-                        "Auth gevonden:",
+                        "Auth gevonden via:",
                         key
                     );
 
@@ -253,7 +418,7 @@
                 }
 
             } catch {
-                // Geen JSON-auth item.
+                // Geen JSON.
             }
         }
 
@@ -285,12 +450,6 @@
             auth
                 ?.allAuthenticationRecords?.[0] ||
             {};
-
-        /*
-         * BELANGRIJK:
-         *
-         * Vestiging is de schoolidentiteit.
-         */
 
         const vestiging =
             clean(
@@ -338,8 +497,6 @@
         const start =
             Date.now();
 
-        let authFound = false;
-
         while (
             Date.now() - start <
             CONFIG.startupTimeout
@@ -350,17 +507,10 @@
 
             if (auth) {
 
-                if (!authFound) {
-
-                    log(
-                        "Somtoday auth gevonden."
-                    );
-
-                    authFound = true;
-                }
-
                 const user =
-                    extractUser(auth);
+                    extractUser(
+                        auth
+                    );
 
                 if (
                     user.id &&
@@ -368,7 +518,7 @@
                 ) {
 
                     log(
-                        "Somtoday gebruiker:",
+                        "Gebruiker gevonden:",
                         user
                     );
 
@@ -376,7 +526,9 @@
                 }
             }
 
-            await sleep(500);
+            await sleep(
+                500
+            );
         }
 
         throw new Error(
@@ -398,7 +550,7 @@
         if (!vestiging) {
 
             throw new Error(
-                "Geen Somtoday-vestiging gevonden."
+                "Geen vestiging gevonden."
             );
         }
 
@@ -409,60 +561,33 @@
 
         channel =
             `${String(CONFIG.channelPrefix)}.` +
-            `${String(
-                schoolHash.slice(
-                    0,
-                    24
-                )
-            )}.general`;
+            `${schoolHash.slice(0, 24)}.` +
+            `general`;
 
         log(
-            "Vestiging:",
+            "School:",
             vestiging
         );
 
         log(
-            "School hash:",
-            schoolHash
-        );
-
-        log(
-            "Chat-kanaal:",
+            "Channel:",
             channel
         );
     }
 
     // ============================================================
-    // PUBNUB PAGE-CONTEXT BRIDGE
+    // PUBNUB PAGE CONTEXT BRIDGE
     // ============================================================
 
     function installPubNubBridge() {
 
-        /*
-         * Voorkom dubbele bridge.
-         */
-
         if (
-            window.__SOMTODAY_PUBNUB_BRIDGE_INSTALLED__
+            document.querySelector(
+                'script[data-somtoday-pubnub-bridge="true"]'
+            )
         ) {
-
-            log(
-                "PubNub bridge bestaat al."
-            );
-
             return;
         }
-
-        window.__SOMTODAY_PUBNUB_BRIDGE_INSTALLED__ =
-            true;
-
-        /*
-         * Deze functie wordt als normaal page-script
-         * in de Somtoday pagina geïnjecteerd.
-         *
-         * Daardoor draait PubNub niet in de
-         * geïsoleerde userscript-context.
-         */
 
         const bridgeCode = `
 
@@ -494,29 +619,23 @@
 
                 function post(type, data) {
 
-                    try {
+                    window.postMessage({
 
-                        window.postMessage({
+                        source:
+                            "SOMTODAY_PUBNUB_BRIDGE",
 
-                            source:
-                                "SOMTODAY_PUBNUB_BRIDGE",
+                        type:
+                            type,
 
-                            type:
-                                type,
+                        data:
+                            data || null
 
-                            data:
-                                data || null
-
-                        }, "*");
-
-                    } catch (e) {
-
-                        console.error(
-                            "[Somtoday PubNub Bridge]",
-                            e
-                        );
-                    }
+                    }, "*");
                 }
+
+                // =================================================
+                // LOAD SDK
+                // =================================================
 
                 function loadSDK() {
 
@@ -542,7 +661,7 @@
 
                                 const existing =
                                     document.querySelector(
-                                        'script[data-somtoday-pubnub="true"]'
+                                        'script[data-somtoday-pubnub-sdk="true"]'
                                     );
 
                                 if (existing) {
@@ -563,7 +682,7 @@
 
                                                 reject(
                                                     new Error(
-                                                        "PubNub niet beschikbaar na laden."
+                                                        "PubNub SDK geladen maar niet beschikbaar."
                                                     )
                                                 );
                                             }
@@ -576,7 +695,7 @@
 
                                             reject(
                                                 new Error(
-                                                    "PubNub script kon niet worden geladen."
+                                                    "PubNub SDK kon niet worden geladen."
                                                 )
                                             );
                                         }
@@ -596,7 +715,7 @@
                                 script.async =
                                     true;
 
-                                script.dataset.somtodayPubnub =
+                                script.dataset.somtodayPubnubSdk =
                                     "true";
 
                                 script.onload =
@@ -649,27 +768,16 @@
                     return loadingPromise;
                 }
 
+                // =================================================
+                // CONNECT
+                // =================================================
+
                 async function connect(data) {
 
                     try {
 
                         const PubNub =
                             await loadSDK();
-
-                        const publishKey =
-                            String(
-                                data.publishKey
-                            );
-
-                        const subscribeKey =
-                            String(
-                                data.subscribeKey
-                            );
-
-                        const userId =
-                            String(
-                                data.userId
-                            );
 
                         currentChannel =
                             String(
@@ -680,13 +788,19 @@
                             new PubNub({
 
                                 publishKey:
-                                    publishKey,
+                                    String(
+                                        data.publishKey
+                                    ),
 
                                 subscribeKey:
-                                    subscribeKey,
+                                    String(
+                                        data.subscribeKey
+                                    ),
 
                                 userId:
-                                    userId
+                                    String(
+                                        data.userId
+                                    )
                             });
 
                         pubnub.addListener({
@@ -718,14 +832,6 @@
                                     "MESSAGE",
                                     event.message
                                 );
-                            },
-
-                            messageAction(event) {
-
-                                post(
-                                    "MESSAGE_ACTION",
-                                    event
-                                );
                             }
                         });
 
@@ -746,6 +852,11 @@
                             }
                         );
 
+                        /*
+                         * History wordt na CONNECTED
+                         * apart opgehaald.
+                         */
+
                     } catch (err) {
 
                         post(
@@ -761,7 +872,11 @@
                     }
                 }
 
-                async function publish(data) {
+                // =================================================
+                // FETCH HISTORY
+                // =================================================
+
+                async function fetchHistory(data) {
 
                     try {
 
@@ -774,28 +889,127 @@
 
                         const targetChannel =
                             String(
-                                data.channel
+                                data.channel ||
+                                currentChannel
                             );
 
-                        const message =
-                            data.message;
+                        const count =
+                            Math.max(
+                                1,
+                                Math.min(
+                                    100,
+                                    Number(
+                                        data.count ||
+                                        100
+                                    )
+                                )
+                            );
+
+                        /*
+                         * PubNub Message Persistence.
+                         *
+                         * fetchMessages haalt de opgeslagen
+                         * berichten uit de channel history.
+                         */
+
+                        const result =
+                            await pubnub.fetchMessages({
+
+                                channels: [
+                                    targetChannel
+                                ],
+
+                                count:
+                                    count
+
+                            });
+
+                        let messages = [];
+
+                        const channelData =
+                            result?.channels?.[
+                                targetChannel
+                            ];
+
+                        if (
+                            Array.isArray(
+                                channelData
+                            )
+                        ) {
+
+                            messages =
+                                channelData.map(
+                                    item => {
+
+                                        if (
+                                            item &&
+                                            typeof item ===
+                                                "object" &&
+                                            "message" in item
+                                        ) {
+
+                                            return item.message;
+                                        }
+
+                                        return item;
+                                    }
+                                );
+                        }
+
+                        post(
+                            "HISTORY",
+                            {
+                                channel:
+                                    targetChannel,
+
+                                messages:
+                                    messages
+                            }
+                        );
+
+                    } catch (err) {
+
+                        post(
+                            "HISTORY_ERROR",
+                            {
+                                message:
+                                    String(
+                                        err?.message ||
+                                        err
+                                    )
+                            }
+                        );
+                    }
+                }
+
+                // =================================================
+                // PUBLISH
+                // =================================================
+
+                async function publish(data) {
+
+                    try {
+
+                        if (!pubnub) {
+
+                            throw new Error(
+                                "PubNub is nog niet verbonden."
+                            );
+                        }
 
                         await pubnub.publish({
 
                             channel:
-                                targetChannel,
+                                String(
+                                    data.channel
+                                ),
 
                             message:
-                                message
+                                data.message
                         });
 
                         post(
-                            "PUBLISHED",
-                            {
-                                id:
-                                    message?.id ||
-                                    null
-                            }
+                            "PUBLISHED"
                         );
 
                     } catch (err) {
@@ -812,6 +1026,10 @@
                         );
                     }
                 }
+
+                // =================================================
+                // RECEIVE COMMANDS
+                // =================================================
 
                 window.addEventListener(
                     "message",
@@ -843,8 +1061,19 @@
                             connect(
                                 data.data || {}
                             );
+                        }
 
-                        } else if (
+                        if (
+                            data.type ===
+                            "FETCH_HISTORY"
+                        ) {
+
+                            fetchHistory(
+                                data.data || {}
+                            );
+                        }
+
+                        if (
                             data.type ===
                             "PUBLISH"
                         ) {
@@ -869,6 +1098,9 @@
                 "script"
             );
 
+        script.dataset.somtodayPubnubBridge =
+            "true";
+
         script.textContent =
             bridgeCode;
 
@@ -888,7 +1120,7 @@
     }
 
     // ============================================================
-    // PUBNUB BRIDGE MESSAGES
+    // PUBNUB MESSAGE LISTENER
     // ============================================================
 
     function setupPubNubMessageListener() {
@@ -921,24 +1153,27 @@
 
                     case "BRIDGE_READY":
 
-                        log(
-                            "PubNub bridge is klaar."
-                        );
-
                         connectPubNub();
 
                         break;
 
                     case "CONNECTED":
 
-                        log(
-                            "PubNub verbonden:",
-                            data.data
-                        );
+                        pubnubConnected =
+                            true;
 
                         setStatus(
                             "Verbonden"
                         );
+
+                        /*
+                         * Eerst lokale cache tonen.
+                         * Daarna PubNub History synchroniseren.
+                         */
+
+                        loadLocalCache();
+
+                        syncHistory();
 
                         break;
 
@@ -950,7 +1185,19 @@
 
                         break;
 
-                    case "PUBLISHED":
+                    case "HISTORY":
+
+                        handleHistory(
+                            data.data
+                        );
+
+                        break;
+
+                    case "HISTORY_ERROR":
+
+                        handleHistoryError(
+                            data.data
+                        );
 
                         break;
 
@@ -965,7 +1212,7 @@
                     case "ERROR":
 
                         error(
-                            "PubNub bridge:",
+                            "PubNub:",
                             data.data
                         );
 
@@ -991,10 +1238,6 @@
         ) {
             return;
         }
-
-        log(
-            "PubNub verbinding aanvragen..."
-        );
 
         window.postMessage({
 
@@ -1031,7 +1274,132 @@
     }
 
     // ============================================================
-    // PUBNUB STATUS
+    // SYNC HISTORY
+    // ============================================================
+
+    function syncHistory() {
+
+        if (
+            syncRunning ||
+            !pubnubConnected ||
+            !channel
+        ) {
+            return;
+        }
+
+        syncRunning =
+            true;
+
+        setStatus(
+            "Synchroniseren..."
+        );
+
+        log(
+            "PubNub history synchroniseren..."
+        );
+
+        window.postMessage({
+
+            source:
+                "SOMTODAY_PUBNUB_USERSCRIPT",
+
+            type:
+                "FETCH_HISTORY",
+
+            data: {
+
+                channel:
+                    String(
+                        channel
+                    ),
+
+                count:
+                    CONFIG.maxMessages
+            }
+
+        }, "*");
+    }
+
+    // ============================================================
+    // HISTORY RESULT
+    // ============================================================
+
+    function handleHistory(data) {
+
+        syncRunning =
+            false;
+
+        historyLoaded =
+            true;
+
+        const messages =
+            Array.isArray(
+                data?.messages
+            )
+                ? data.messages
+                : [];
+
+        log(
+            "PubNub history ontvangen:",
+            messages.length,
+            "berichten"
+        );
+
+        /*
+         * History wordt opnieuw door addMessage()
+         * gededupliceerd.
+         */
+
+        for (
+            const message of messages
+        ) {
+
+            addMessage(
+                message,
+                false
+            );
+        }
+
+        saveLocalCache();
+
+        renderAllMessages();
+
+        setStatus(
+            "Verbonden"
+        );
+    }
+
+    // ============================================================
+    // HISTORY ERROR
+    // ============================================================
+
+    function handleHistoryError(data) {
+
+        syncRunning =
+            false;
+
+        /*
+         * De realtime chat kan nog steeds
+         * functioneren zonder History.
+         */
+
+        const message =
+            clean(
+                data?.message
+            );
+
+        warn(
+            "History synchroniseren mislukt:",
+            message
+        );
+
+        setStatus(
+            "Verbonden"
+        );
+    }
+
+    // ============================================================
+    // STATUS
     // ============================================================
 
     function handlePubNubStatus(data) {
@@ -1046,45 +1414,43 @@
             "PNConnectedCategory"
         ) {
 
+            pubnubConnected =
+                true;
+
             setStatus(
                 "Verbonden"
             );
 
-            return;
-        }
-
-        if (
+        } else if (
             category ===
             "PNNetworkDownCategory"
         ) {
 
+            pubnubConnected =
+                false;
+
             setStatus(
-                "Geen verbinding"
+                "Offline"
             );
 
-            return;
-        }
-
-        if (
+        } else if (
             category ===
             "PNNetworkUpCategory"
         ) {
+
+            pubnubConnected =
+                true;
 
             setStatus(
                 "Verbonden"
             );
 
-            return;
-        }
+            /*
+             * Zodra netwerk terug is:
+             * gemiste history opnieuw ophalen.
+             */
 
-        if (
-            category ===
-            "PNNetworkIssuesCategory"
-        ) {
-
-            setStatus(
-                "Verbindingsprobleem"
-            );
+            syncHistory();
         }
     }
 
@@ -1092,14 +1458,9 @@
     // SEND MESSAGE
     // ============================================================
 
-    async function sendMessage() {
+    function sendMessage() {
 
         if (!channel) {
-
-            setStatus(
-                "Chat offline"
-            );
-
             return;
         }
 
@@ -1113,7 +1474,8 @@
         }
 
         if (
-            text.length > 2000
+            text.length >
+            2000
         ) {
 
             setStatus(
@@ -1139,74 +1501,73 @@
                 ),
 
             text:
-                String(text),
+                text,
 
             timestamp:
                 Date.now()
         };
 
-        try {
+        /*
+         * Direct lokaal toevoegen.
+         *
+         * Hierdoor ziet de gebruiker het bericht
+         * onmiddellijk, zelfs voordat PubNub antwoordt.
+         */
 
-            sendButton.disabled =
-                true;
+        addMessage(
+            message,
+            true
+        );
 
-            window.postMessage({
+        renderAllMessages();
 
-                source:
-                    "SOMTODAY_PUBNUB_USERSCRIPT",
+        saveLocalCache();
 
-                type:
-                    "PUBLISH",
+        messageInput.value =
+            "";
 
-                data: {
+        autoResizeInput();
 
-                    channel:
-                        String(
-                            channel
-                        ),
+        sendButton.disabled =
+            true;
 
-                    message:
-                        message
+        window.postMessage({
+
+            source:
+                "SOMTODAY_PUBNUB_USERSCRIPT",
+
+            type:
+                "PUBLISH",
+
+            data: {
+
+                channel:
+                    String(
+                        channel
+                    ),
+
+                message:
+                    message
+            }
+
+        }, "*");
+
+        setTimeout(
+            () => {
+
+                if (sendButton) {
+
+                    sendButton.disabled =
+                        false;
                 }
 
-            }, "*");
-
-            messageInput.value =
-                "";
-
-            autoResizeInput();
-
-        } catch (err) {
-
-            error(
-                "Bericht verzenden mislukt:",
-                err
-            );
-
-            setStatus(
-                "Verzenden mislukt"
-            );
-
-        } finally {
-
-            setTimeout(
-                () => {
-
-                    if (sendButton) {
-                        sendButton.disabled =
-                            false;
-                    }
-
-                },
-                250
-            );
-
-            messageInput?.focus();
-        }
+            },
+            250
+        );
     }
 
     // ============================================================
-    // INCOMING MESSAGE
+    // NORMALIZE MESSAGE
     // ============================================================
 
     function normalizeMessage(message) {
@@ -1219,12 +1580,11 @@
             return null;
         }
 
-        return {
+        const normalized = {
 
             id:
                 clean(
-                    message.id ||
-                    crypto.randomUUID()
+                    message.id
                 ),
 
             userId:
@@ -1249,10 +1609,28 @@
                     Date.now()
                 )
         };
+
+        /*
+         * Oude/ongeldige berichten negeren.
+         */
+
+        if (
+            !normalized.id ||
+            !normalized.text
+        ) {
+            return null;
+        }
+
+        return normalized;
     }
 
-    function handleIncomingMessage(
-        message
+    // ============================================================
+    // ADD MESSAGE
+    // ============================================================
+
+    function addMessage(
+        message,
+        render = true
     ) {
 
         const normalized =
@@ -1260,42 +1638,246 @@
                 message
             );
 
-        if (
-            !normalized ||
-            !normalized.text
-        ) {
-            return;
+        if (!normalized) {
+            return false;
         }
 
         /*
-         * Voorkom dubbele berichten.
+         * DEDUPLICATION
          */
 
-        const alreadyExists =
-            receivedMessages.some(
-                existing =>
-                    existing.id ===
-                    normalized.id
-            );
-
-        if (alreadyExists) {
-            return;
+        if (
+            messageMap.has(
+                normalized.id
+            )
+        ) {
+            return false;
         }
 
-        receivedMessages.push(
+        messageMap.set(
+            normalized.id,
             normalized
         );
 
-        while (
-            receivedMessages.length >
+        /*
+         * Beperk lokale map.
+         */
+
+        if (
+            messageMap.size >
             CONFIG.maxMessages
         ) {
 
-            receivedMessages.shift();
+            const sorted =
+                Array.from(
+                    messageMap.values()
+                )
+                    .sort(
+                        (a, b) =>
+                            Number(a.timestamp) -
+                            Number(b.timestamp)
+                    );
+
+            while (
+                sorted.length >
+                CONFIG.maxMessages
+            ) {
+
+                const oldest =
+                    sorted.shift();
+
+                if (oldest) {
+
+                    messageMap.delete(
+                        oldest.id
+                    );
+                }
+            }
         }
 
-        renderMessage(
-            normalized
+        if (render) {
+
+            renderAllMessages();
+        }
+
+        return true;
+    }
+
+    // ============================================================
+    // INCOMING REALTIME MESSAGE
+    // ============================================================
+
+    function handleIncomingMessage(
+        message
+    ) {
+
+        const added =
+            addMessage(
+                message,
+                false
+            );
+
+        if (!added) {
+            return;
+        }
+
+        saveLocalCache();
+
+        renderAllMessages();
+    }
+
+    // ============================================================
+    // RENDER ALL
+    // ============================================================
+
+    function renderAllMessages() {
+
+        if (!messagesContainer) {
+            return;
+        }
+
+        const messages =
+            Array.from(
+                messageMap.values()
+            )
+                .sort(
+                    (a, b) =>
+                        Number(a.timestamp) -
+                        Number(b.timestamp)
+                )
+                .slice(
+                    -CONFIG.maxMessages
+                );
+
+        messagesContainer.innerHTML =
+            "";
+
+        if (
+            messages.length === 0
+        ) {
+
+            const empty =
+                document.createElement(
+                    "div"
+                );
+
+            empty.className =
+                "somtoday-chat-empty";
+
+            empty.textContent =
+                "Nog geen berichten.";
+
+            messagesContainer.appendChild(
+                empty
+            );
+
+            return;
+        }
+
+        for (
+            const message of messages
+        ) {
+
+            renderMessage(
+                message
+            );
+        }
+
+        messagesContainer.scrollTop =
+            messagesContainer.scrollHeight;
+    }
+
+    // ============================================================
+    // RENDER ONE MESSAGE
+    // ============================================================
+
+    function renderMessage(message) {
+
+        if (!messagesContainer) {
+            return;
+        }
+
+        const mine =
+            String(
+                message.userId
+            ) ===
+            String(
+                currentUser.id
+            );
+
+        const wrapper =
+            document.createElement(
+                "div"
+            );
+
+        wrapper.className =
+            "somtoday-chat-message " +
+            (
+                mine
+                    ? "mine"
+                    : "other"
+            );
+
+        const name =
+            document.createElement(
+                "div"
+            );
+
+        name.className =
+            "somtoday-chat-message-name";
+
+        name.textContent =
+            mine
+                ? "Jij"
+                : message.name;
+
+        const bubble =
+            document.createElement(
+                "div"
+            );
+
+        bubble.className =
+            "somtoday-chat-bubble";
+
+        bubble.textContent =
+            message.text;
+
+        const time =
+            document.createElement(
+                "div"
+            );
+
+        time.className =
+            "somtoday-chat-message-time";
+
+        time.textContent =
+            new Date(
+                message.timestamp
+            ).toLocaleTimeString(
+                "nl-NL",
+                {
+                    hour:
+                        "2-digit",
+
+                    minute:
+                        "2-digit"
+                }
+            );
+
+        wrapper.appendChild(
+            name
+        );
+
+        wrapper.appendChild(
+            bubble
+        );
+
+        wrapper.appendChild(
+            time
+        );
+
+        messagesContainer.appendChild(
+            wrapper
         );
     }
 
@@ -1339,14 +1921,11 @@
 
                 height: 100%;
 
-                flex:
-                    0 0 auto;
+                flex: 0 0 auto;
 
-                cursor:
-                    pointer;
+                cursor: pointer;
 
-                user-select:
-                    none;
+                user-select: none;
 
                 color:
                     var(
@@ -1354,48 +1933,33 @@
                         #555
                     );
 
-                font-family:
-                    inherit;
+                font-family: inherit;
 
-                font-size:
-                    14px;
+                font-size: 14px;
 
-                line-height:
-                    1;
+                line-height: 1;
 
-                box-sizing:
-                    border-box;
+                box-sizing: border-box;
             }
 
             #somtoday-school-chat-tab
             .somtoday-chat-tab-inner {
 
-                position:
-                    relative;
+                display: flex;
 
-                display:
-                    flex;
+                align-items: center;
 
-                align-items:
-                    center;
+                justify-content: center;
 
-                justify-content:
-                    center;
+                gap: 8px;
 
-                gap:
-                    8px;
+                height: 100%;
 
-                height:
-                    100%;
+                padding: 0 16px;
 
-                padding:
-                    0 16px;
+                box-sizing: border-box;
 
-                box-sizing:
-                    border-box;
-
-                white-space:
-                    nowrap;
+                white-space: nowrap;
 
                 transition:
                     color 120ms ease,
@@ -1405,108 +1969,61 @@
             #somtoday-school-chat-tab
             .somtoday-chat-tab-icon {
 
-                display:
-                    flex;
+                display: flex;
 
-                align-items:
-                    center;
+                align-items: center;
 
-                justify-content:
-                    center;
+                justify-content: center;
 
-                width:
-                    16px;
+                width: 20px;
 
-                height:
-                    16px;
+                height: 20px;
 
-                flex:
-                    0 0 16px;
+                flex: 0 0 20px;
             }
 
             #somtoday-school-chat-tab
             .somtoday-chat-tab-icon svg {
 
-                display:
-                    block;
+                display: block;
 
-                width:
-                    16px;
+                width: 20px;
 
-                height:
-                    16px;
+                height: 20px;
 
-                fill:
-                    currentColor;
-            }
-
-            #somtoday-school-chat-tab
-            .somtoday-chat-tab-label {
-
-                display:
-                    inline-block;
-
-                font-family:
-                    inherit;
-
-                font-size:
-                    inherit;
-
-                font-weight:
-                    inherit;
-
-                line-height:
-                    1;
+                fill: currentColor;
             }
 
             #somtoday-school-chat-tab
             .somtoday-chat-active-top {
 
-                position:
-                    absolute;
+                position: absolute;
 
-                left:
-                    0;
+                left: 0;
 
-                right:
-                    0;
+                right: 0;
 
-                top:
-                    0;
+                top: 0;
 
-                height:
-                    3px;
+                height: 3px;
 
-                background:
-                    transparent;
-
-                border-radius:
-                    0 0 2px 2px;
+                background: transparent;
             }
 
             #somtoday-school-chat-tab
             .somtoday-chat-active-bottom {
 
-                position:
-                    absolute;
+                position: absolute;
 
-                left:
-                    0;
+                left: 0;
 
-                right:
-                    0;
+                right: 0;
 
-                bottom:
-                    0;
+                bottom: 0;
 
-                height:
-                    3px;
+                height: 3px;
 
-                background:
-                    transparent;
-
-                border-radius:
-                    2px 2px 0 0;
+                background: transparent;
             }
 
             #somtoday-school-chat-tab:hover
@@ -1535,16 +2052,6 @@
             }
 
             #somtoday-school-chat-tab.active
-            .somtoday-chat-active-top {
-
-                background:
-                    var(
-                        --action-primary-normal,
-                        #3565d4
-                    );
-            }
-
-            #somtoday-school-chat-tab.active
             .somtoday-chat-active-bottom {
 
                 background:
@@ -1560,20 +2067,15 @@
 
             #somtoday-school-chat-panel {
 
-                position:
-                    fixed;
+                position: fixed;
 
-                z-index:
-                    999999;
+                z-index: 999999;
 
-                display:
-                    none;
+                display: none;
 
-                flex-direction:
-                    column;
+                flex-direction: column;
 
-                box-sizing:
-                    border-box;
+                box-sizing: border-box;
 
                 background:
                     var(
@@ -1587,25 +2089,19 @@
                         #222
                     );
 
-                border:
+                border-top:
                     1px solid
                     var(
-                        --border-neutral-normal,
-                        #ddd
+                        --border-neutral-weak,
+                        #e5e5e5
                     );
 
-                box-shadow:
-                    0 4px 18px
-                    rgba(0,0,0,.10);
-
-                overflow:
-                    hidden;
+                overflow: hidden;
             }
 
             #somtoday-school-chat-panel.open {
 
-                display:
-                    flex;
+                display: flex;
             }
 
             /* ====================================================
@@ -1614,26 +2110,19 @@
 
             .somtoday-chat-header {
 
-                display:
-                    flex;
+                display: flex;
 
-                align-items:
-                    center;
+                align-items: center;
 
-                justify-content:
-                    space-between;
+                justify-content: space-between;
 
-                flex:
-                    0 0 auto;
+                flex: 0 0 auto;
 
-                min-height:
-                    56px;
+                min-height: 56px;
 
-                padding:
-                    0 20px;
+                padding: 0 24px;
 
-                box-sizing:
-                    border-box;
+                box-sizing: border-box;
 
                 border-bottom:
                     1px solid
@@ -1651,56 +2140,29 @@
 
             .somtoday-chat-header-left {
 
-                min-width:
-                    0;
+                min-width: 0;
 
-                display:
-                    flex;
+                display: flex;
 
-                flex-direction:
-                    column;
+                flex-direction: column;
 
-                gap:
-                    3px;
+                gap: 3px;
             }
 
             .somtoday-chat-title {
 
-                font-size:
-                    17px;
+                font-size: 18px;
 
-                font-weight:
-                    600;
+                font-weight: 600;
 
-                line-height:
-                    20px;
-
-                color:
-                    var(
-                        --text-strong,
-                        #222
-                    );
+                line-height: 22px;
             }
 
             .somtoday-chat-school {
 
-                max-width:
-                    400px;
+                font-size: 12px;
 
-                overflow:
-                    hidden;
-
-                text-overflow:
-                    ellipsis;
-
-                white-space:
-                    nowrap;
-
-                font-size:
-                    12px;
-
-                line-height:
-                    16px;
+                line-height: 16px;
 
                 color:
                     var(
@@ -1711,17 +2173,13 @@
 
             .somtoday-chat-header-status {
 
-                display:
-                    flex;
+                display: flex;
 
-                align-items:
-                    center;
+                align-items: center;
 
-                gap:
-                    7px;
+                gap: 7px;
 
-                font-size:
-                    12px;
+                font-size: 12px;
 
                 color:
                     var(
@@ -1732,20 +2190,13 @@
 
             .somtoday-chat-status-dot {
 
-                width:
-                    7px;
+                width: 7px;
 
-                height:
-                    7px;
+                height: 7px;
 
-                flex:
-                    0 0 7px;
+                border-radius: 50%;
 
-                border-radius:
-                    50%;
-
-                background:
-                    currentColor;
+                background: currentColor;
             }
 
             /* ====================================================
@@ -1754,23 +2205,15 @@
 
             .somtoday-chat-messages {
 
-                flex:
-                    1 1 auto;
+                flex: 1 1 auto;
 
-                min-height:
-                    0;
+                min-height: 0;
 
-                overflow-y:
-                    auto;
+                overflow-y: auto;
 
-                overflow-x:
-                    hidden;
+                padding: 20px 24px;
 
-                padding:
-                    20px;
-
-                box-sizing:
-                    border-box;
+                box-sizing: border-box;
 
                 background:
                     var(
@@ -1781,20 +2224,13 @@
 
             .somtoday-chat-empty {
 
-                display:
-                    flex;
+                display: flex;
 
-                align-items:
-                    center;
+                align-items: center;
 
-                justify-content:
-                    center;
+                justify-content: center;
 
-                min-height:
-                    180px;
-
-                text-align:
-                    center;
+                min-height: 180px;
 
                 color:
                     var(
@@ -1802,41 +2238,33 @@
                         #777
                     );
 
-                font-size:
-                    14px;
+                font-size: 14px;
             }
 
             .somtoday-chat-message {
 
-                display:
-                    flex;
+                display: flex;
 
-                flex-direction:
-                    column;
+                flex-direction: column;
 
                 max-width:
                     min(75%, 600px);
 
-                margin-bottom:
-                    12px;
+                margin-bottom: 12px;
             }
 
             .somtoday-chat-message.mine {
 
-                margin-left:
-                    auto;
+                margin-left: auto;
 
-                align-items:
-                    flex-end;
+                align-items: flex-end;
             }
 
             .somtoday-chat-message.other {
 
-                margin-right:
-                    auto;
+                margin-right: auto;
 
-                align-items:
-                    flex-start;
+                align-items: flex-start;
             }
 
             .somtoday-chat-message-name {
@@ -1844,11 +2272,7 @@
                 margin:
                     0 8px 4px;
 
-                font-size:
-                    12px;
-
-                line-height:
-                    16px;
+                font-size: 12px;
 
                 color:
                     var(
@@ -1869,8 +2293,7 @@
                         #e0e0e0
                     );
 
-                border-radius:
-                    10px;
+                border-radius: 10px;
 
                 background:
                     var(
@@ -1878,23 +2301,13 @@
                         #fff
                     );
 
-                color:
-                    var(
-                        --text-strong,
-                        #222
-                    );
+                font-size: 14px;
 
-                font-size:
-                    14px;
+                line-height: 20px;
 
-                line-height:
-                    20px;
+                white-space: pre-wrap;
 
-                white-space:
-                    pre-wrap;
-
-                overflow-wrap:
-                    anywhere;
+                overflow-wrap: anywhere;
             }
 
             .somtoday-chat-message.mine
@@ -1906,11 +2319,9 @@
                         #3565d4
                     );
 
-                color:
-                    #fff;
+                color: white;
 
-                border-color:
-                    transparent;
+                border-color: transparent;
             }
 
             .somtoday-chat-message-time {
@@ -1918,11 +2329,7 @@
                 margin:
                     3px 8px 0;
 
-                font-size:
-                    10px;
-
-                line-height:
-                    13px;
+                font-size: 10px;
 
                 color:
                     var(
@@ -1937,23 +2344,16 @@
 
             .somtoday-chat-composer {
 
-                display:
-                    flex;
+                display: flex;
 
-                align-items:
-                    flex-end;
+                align-items: flex-end;
 
-                gap:
-                    8px;
+                gap: 8px;
 
-                flex:
-                    0 0 auto;
+                flex: 0 0 auto;
 
                 padding:
-                    12px 14px;
-
-                box-sizing:
-                    border-box;
+                    12px 16px;
 
                 border-top:
                     1px solid
@@ -1971,23 +2371,17 @@
 
             .somtoday-chat-input {
 
-                flex:
-                    1 1 auto;
+                flex: 1;
 
-                min-width:
-                    0;
+                min-width: 0;
 
-                min-height:
-                    40px;
+                min-height: 40px;
 
-                max-height:
-                    120px;
+                max-height: 120px;
 
-                resize:
-                    vertical;
+                resize: vertical;
 
-                box-sizing:
-                    border-box;
+                box-sizing: border-box;
 
                 padding:
                     9px 11px;
@@ -1999,11 +2393,9 @@
                         #d6d6d6
                     );
 
-                border-radius:
-                    7px;
+                border-radius: 7px;
 
-                outline:
-                    none;
+                outline: none;
 
                 background:
                     var(
@@ -2017,14 +2409,11 @@
                         #222
                     );
 
-                font-family:
-                    inherit;
+                font-family: inherit;
 
-                font-size:
-                    14px;
+                font-size: 14px;
 
-                line-height:
-                    20px;
+                line-height: 20px;
             }
 
             .somtoday-chat-input:focus {
@@ -2034,43 +2423,20 @@
                         --action-primary-normal,
                         #3565d4
                     );
-
-                box-shadow:
-                    0 0 0 1px
-                    var(
-                        --action-primary-normal,
-                        #3565d4
-                    );
-            }
-
-            .somtoday-chat-input::placeholder {
-
-                color:
-                    var(
-                        --text-weak,
-                        #888
-                    );
             }
 
             .somtoday-chat-send {
 
-                flex:
-                    0 0 auto;
-
-                height:
-                    40px;
+                height: 40px;
 
                 padding:
                     0 15px;
 
-                border:
-                    0;
+                border: 0;
 
-                border-radius:
-                    7px;
+                border-radius: 7px;
 
-                cursor:
-                    pointer;
+                cursor: pointer;
 
                 background:
                     var(
@@ -2078,35 +2444,20 @@
                         #3565d4
                     );
 
-                color:
-                    #fff;
+                color: white;
 
-                font-family:
-                    inherit;
+                font-family: inherit;
 
-                font-size:
-                    14px;
+                font-size: 14px;
 
-                font-weight:
-                    600;
-            }
-
-            .somtoday-chat-send:hover {
-
-                background:
-                    var(
-                        --action-primary-strong,
-                        #2853bd
-                    );
+                font-weight: 600;
             }
 
             .somtoday-chat-send:disabled {
 
-                opacity:
-                    .55;
+                opacity: .55;
 
-                cursor:
-                    default;
+                cursor: default;
             }
 
             /* ====================================================
@@ -2120,49 +2471,23 @@
 
                     padding:
                         0 10px;
-
-                    gap:
-                        6px;
                 }
 
                 #somtoday-school-chat-tab
                 .somtoday-chat-tab-label {
 
-                    display:
-                        none;
+                    display: none;
                 }
 
                 #somtoday-school-chat-panel {
 
-                    left:
-                        0 !important;
+                    left: 0 !important;
 
-                    right:
-                        0 !important;
+                    top: 0 !important;
 
-                    top:
-                        0 !important;
+                    width: 100% !important;
 
-                    bottom:
-                        0 !important;
-
-                    width:
-                        100% !important;
-
-                    height:
-                        100% !important;
-
-                    border:
-                        0;
-
-                    border-radius:
-                        0;
-                }
-
-                .somtoday-chat-message {
-
-                    max-width:
-                        86%;
+                    height: 100% !important;
                 }
             }
         `;
@@ -2178,13 +2503,13 @@
 
     function findTabBar() {
 
-        const normal =
+        const direct =
             document.querySelector(
                 "sl-tab-bar"
             );
 
-        if (normal) {
-            return normal;
+        if (direct) {
+            return direct;
         }
 
         function search(root) {
@@ -2193,35 +2518,35 @@
                 return null;
             }
 
-            const direct =
+            const found =
                 root.querySelector?.(
                     "sl-tab-bar"
                 );
 
-            if (direct) {
-                return direct;
+            if (found) {
+                return found;
             }
 
-            const all =
+            const elements =
                 root.querySelectorAll?.(
                     "*"
                 ) || [];
 
             for (
-                const element of all
+                const element of elements
             ) {
 
                 if (
                     element.shadowRoot
                 ) {
 
-                    const found =
+                    const result =
                         search(
                             element.shadowRoot
                         );
 
-                    if (found) {
-                        return found;
+                    if (result) {
+                        return result;
                     }
                 }
             }
@@ -2244,7 +2569,6 @@
             chatTab &&
             chatTab.isConnected
         ) {
-
             return chatTab;
         }
 
@@ -2308,11 +2632,20 @@
 
                     <svg
                         xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
+                        width="20px"
+                        height="20px"
                         viewBox="0 0 24 24"
                         display="block"
                     >
+
+                        <path
+                            d="m16.827 3.521 4.07 4.046a.73.73 0 0 0 1.03 0l.854-.849a2.163 2.163 0 0 0 0-3.073l-2.009-1.997a2.196 2.196 0 0 0-3.091 0l-.854.849a.72.72 0 0 0 0 1.024"
+                        ></path>
+
+                        <path
+                            fill-rule="evenodd"
+                            d="M6.11 13.448v4.046c0 .4.326.724.729.724h4.07a.73.73 0 0 0 .515-.212l8.745-8.69a.72.72 0 0 0 0-1.025l-4.07-4.046a.73.73 0 0 0-1.031 0l-8.745 8.691a.72.72 0 0 0-.213.512m6.043 2.385-.729.724a.73.73 0 0 1-.515.213h-.705a.73.73 0 0 1-.652-.4l-.419-.833a.73.73 0 0 0-.325-.324l-.838-.416a.72.72 0 0 1-.403-.648v-.7c0-.193.077-.377.214-.513l.729-.724a.73.73 0 0 1 1.03 0l2.613 2.597a.72.72 0 0 1 0 1.024"
+                        ></path>
 
                         <path
                             d="M4.332 24C1.94 24.002 0 22.076 0 19.698V6.204c0-2.375 1.938-4.301 4.328-4.301h5.509a1.27 1.27 0 0 1 1.273 1.265 1.27 1.27 0 0 1-1.273 1.265h-5.51c-.983 0-1.781.793-1.781 1.771v13.495c0 .98.799 1.773 1.784 1.772l13.32-.014a1.777 1.777 0 0 0 1.78-1.77v-4.35c0-.7.57-1.266 1.272-1.266a1.27 1.27 0 0 1 1.273 1.265v4.35c0 2.374-1.935 4.3-4.323 4.302z"
@@ -2337,7 +2670,9 @@
 
         tab.addEventListener(
             "click",
-            () => {
+            event => {
+
+                event.stopPropagation();
 
                 toggleChat();
             }
@@ -2359,20 +2694,12 @@
             }
         );
 
-        /*
-         * Achter de laatste Somtoday-tab.
-         */
-
         tabBar.appendChild(
             tab
         );
 
         chatTab =
             tab;
-
-        log(
-            "Chat-tab toegevoegd."
-        );
 
         return tab;
     }
@@ -2387,7 +2714,6 @@
             chatPanel &&
             chatPanel.isConnected
         ) {
-
             return chatPanel;
         }
 
@@ -2432,11 +2758,6 @@
         panel.id =
             "somtoday-school-chat-panel";
 
-        panel.setAttribute(
-            "aria-label",
-            "School Chat"
-        );
-
         panel.innerHTML = `
 
             <div
@@ -2456,8 +2777,7 @@
                     <div
                         class="somtoday-chat-school"
                         id="somtoday-chat-school"
-                    >
-                    </div>
+                    ></div>
 
                 </div>
 
@@ -2482,16 +2802,7 @@
             <div
                 class="somtoday-chat-messages"
                 id="somtoday-chat-messages"
-            >
-
-                <div
-                    class="somtoday-chat-empty"
-                    id="somtoday-chat-empty"
-                >
-                    Nog geen berichten.
-                </div>
-
-            </div>
+            ></div>
 
             <div
                 class="somtoday-chat-composer"
@@ -2543,14 +2854,14 @@
                 "somtoday-chat-status"
             );
 
-        const schoolElement =
+        const school =
             document.getElementById(
                 "somtoday-chat-school"
             );
 
-        if (schoolElement) {
+        if (school) {
 
-            schoolElement.textContent =
+            school.textContent =
                 currentUser?.vestiging ||
                 "School";
         }
@@ -2581,6 +2892,8 @@
             autoResizeInput
         );
 
+        renderAllMessages();
+
         return panel;
     }
 
@@ -2610,132 +2923,15 @@
 
     function setStatus(text) {
 
-        if (!statusElement) {
-            return;
-        }
+        if (statusElement) {
 
-        statusElement.textContent =
-            String(text);
+            statusElement.textContent =
+                String(text);
+        }
     }
 
     // ============================================================
-    // RENDER MESSAGE
-    // ============================================================
-
-    function renderMessage(
-        message
-    ) {
-
-        if (!messagesContainer) {
-            return;
-        }
-
-        const empty =
-            document.getElementById(
-                "somtoday-chat-empty"
-            );
-
-        if (empty) {
-            empty.remove();
-        }
-
-        const mine =
-            String(
-                message.userId
-            ) ===
-            String(
-                currentUser.id
-            );
-
-        const wrapper =
-            document.createElement(
-                "div"
-            );
-
-        wrapper.className =
-            "somtoday-chat-message " +
-            (
-                mine
-                    ? "mine"
-                    : "other"
-            );
-
-        const name =
-            document.createElement(
-                "div"
-            );
-
-        name.className =
-            "somtoday-chat-message-name";
-
-        name.textContent =
-            mine
-                ? "Jij"
-                : message.name;
-
-        const bubble =
-            document.createElement(
-                "div"
-            );
-
-        bubble.className =
-            "somtoday-chat-bubble";
-
-        /*
-         * textContent zodat berichten geen HTML
-         * kunnen injecteren.
-         */
-
-        bubble.textContent =
-            message.text;
-
-        const time =
-            document.createElement(
-                "div"
-            );
-
-        time.className =
-            "somtoday-chat-message-time";
-
-        const date =
-            new Date(
-                message.timestamp
-            );
-
-        time.textContent =
-            date.toLocaleTimeString(
-                "nl-NL",
-                {
-                    hour:
-                        "2-digit",
-
-                    minute:
-                        "2-digit"
-                }
-            );
-
-        wrapper.appendChild(
-            name
-        );
-
-        wrapper.appendChild(
-            bubble
-        );
-
-        wrapper.appendChild(
-            time
-        );
-
-        messagesContainer.appendChild(
-            wrapper
-        );
-
-        messagesContainer.scrollTop =
-            messagesContainer.scrollHeight;
-    }
-
-    // ============================================================
-    // POSITION
+    // POSITION PANEL
     // ============================================================
 
     function positionChatPanel() {
@@ -2795,85 +2991,6 @@
     }
 
     // ============================================================
-    // HIDE SOMTODAY CONTENT
-    // ============================================================
-
-    function hideSomtodayContent() {
-
-        hiddenElements = [];
-
-        const header =
-            document.querySelector(
-                "sl-header"
-            );
-
-        const bodyChildren =
-            Array.from(
-                document.body.children
-            );
-
-        for (
-            const element of bodyChildren
-        ) {
-
-            if (
-                element === chatPanel ||
-                element === header ||
-                element.id ===
-                    "somtoday-school-chat-style" ||
-                element.tagName ===
-                    "SCRIPT"
-            ) {
-                continue;
-            }
-
-            const rect =
-                element.getBoundingClientRect();
-
-            if (
-                rect.height > 100 &&
-                rect.width > 200
-            ) {
-
-                hiddenElements.push({
-
-                    element:
-                        element,
-
-                    display:
-                        element.style.display
-                });
-
-                element.style.display =
-                    "none";
-            }
-        }
-    }
-
-    // ============================================================
-    // SHOW SOMTODAY CONTENT
-    // ============================================================
-
-    function showSomtodayContent() {
-
-        for (
-            const item of hiddenElements
-        ) {
-
-            if (
-                item.element &&
-                item.element.isConnected
-            ) {
-
-                item.element.style.display =
-                    item.display;
-            }
-        }
-
-        hiddenElements = [];
-    }
-
-    // ============================================================
     // OPEN CHAT
     // ============================================================
 
@@ -2909,15 +3026,32 @@
 
         positionChatPanel();
 
-        hideSomtodayContent();
+        /*
+         * Bij openen opnieuw syncen.
+         */
+
+        if (
+            CONFIG.syncOnOpen &&
+            pubnubConnected
+        ) {
+
+            syncHistory();
+        }
 
         setTimeout(
             () => {
 
-                messageInput?.focus();
+                if (messageInput) {
+
+                    messageInput.focus();
+                }
 
             },
             50
+        );
+
+        log(
+            "Chat geopend."
         );
     }
 
@@ -2950,11 +3084,13 @@
             );
         }
 
-        showSomtodayContent();
+        log(
+            "Chat gesloten."
+        );
     }
 
     // ============================================================
-    // TOGGLE CHAT
+    // TOGGLE
     // ============================================================
 
     function toggleChat() {
@@ -2970,6 +3106,100 @@
     }
 
     // ============================================================
+    // NATIVE SOMTODAY TABS
+    // ============================================================
+
+    function setupNativeTabSwitching() {
+
+        document.addEventListener(
+            "click",
+            event => {
+
+                if (!chatOpen) {
+                    return;
+                }
+
+                const target =
+                    event.target;
+
+                if (
+                    !target ||
+                    !target.closest
+                ) {
+                    return;
+                }
+
+                if (
+                    target.closest(
+                        "#somtoday-school-chat-tab"
+                    ) ||
+                    target.closest(
+                        "#somtoday-school-chat-panel"
+                    )
+                ) {
+                    return;
+                }
+
+                const nativeTab =
+                    target.closest(
+                        "sl-tab-item"
+                    );
+
+                if (!nativeTab) {
+                    return;
+                }
+
+                log(
+                    "Native Somtoday-tab -> Chat sluiten."
+                );
+
+                closeChat();
+
+            },
+            true
+        );
+
+        document.addEventListener(
+            "keydown",
+            event => {
+
+                if (!chatOpen) {
+                    return;
+                }
+
+                if (
+                    event.key !== "Enter" &&
+                    event.key !== " "
+                ) {
+                    return;
+                }
+
+                const target =
+                    event.target;
+
+                if (
+                    !target ||
+                    !target.closest
+                ) {
+                    return;
+                }
+
+                const nativeTab =
+                    target.closest(
+                        "sl-tab-item"
+                    );
+
+                if (nativeTab) {
+
+                    closeChat();
+                }
+
+            },
+            true
+        );
+    }
+
+    // ============================================================
     // OBSERVER
     // ============================================================
 
@@ -2982,11 +3212,6 @@
         observer =
             new MutationObserver(
                 () => {
-
-                    /*
-                     * Angular kan de header opnieuw
-                     * renderen.
-                     */
 
                     if (
                         !chatTab?.isConnected
@@ -3046,10 +3271,45 @@
                 }
             }
         );
+
+        /*
+         * Tab terug naar foreground:
+         * history opnieuw controleren.
+         */
+
+        document.addEventListener(
+            "visibilitychange",
+            () => {
+
+                if (
+                    !document.hidden &&
+                    pubnubConnected
+                ) {
+
+                    syncHistory();
+                }
+            }
+        );
+
+        /*
+         * Internet komt terug.
+         */
+
+        window.addEventListener(
+            "online",
+            () => {
+
+                log(
+                    "Internet terug -> history sync."
+                );
+
+                syncHistory();
+            }
+        );
     }
 
     // ============================================================
-    // WAIT FOR SOMTODAY UI
+    // WAIT FOR SOMTODAY
     // ============================================================
 
     async function waitForSomtodayUI() {
@@ -3062,10 +3322,9 @@
             CONFIG.startupTimeout
         ) {
 
-            const tabBar =
-                findTabBar();
-
-            if (tabBar) {
+            if (
+                findTabBar()
+            ) {
 
                 return;
             }
@@ -3092,56 +3351,30 @@
                 "Somtoday School Chat starten..."
             );
 
-            /*
-             * CSS.
-             */
-
             injectStyles();
-
-            /*
-             * Luister naar de PubNub bridge.
-             */
 
             setupPubNubMessageListener();
 
-            /*
-             * Installeer bridge vóórdat we
-             * PubNub proberen te gebruiken.
-             */
-
             installPubNubBridge();
-
-            /*
-             * Somtoday gebruiker.
-             */
 
             currentUser =
                 await findSomtodayUser();
 
-            log(
-                "Gebruiker:",
-                currentUser
-            );
-
-            /*
-             * Schoolkanaal.
-             */
-
             await prepareChannel();
 
             /*
-             * Wacht op Somtoday header.
+             * Lokale cache alvast laden.
              */
+
+            loadLocalCache();
 
             await waitForSomtodayUI();
-
-            /*
-             * UI maken.
-             */
 
             createChatTab();
 
             createChatPanel();
+
+            setupNativeTabSwitching();
 
             setupObserver();
 
@@ -3152,53 +3385,17 @@
             );
 
             /*
-             * Bridge kan BRIDGE_READY al hebben
-             * gestuurd voordat de listener klaar was.
-             *
-             * Daarom sturen we hier zelf ook CONNECT.
+             * PubNub op achtergrond verbinden.
              */
 
             connectPubNub();
 
-            /*
-             * ====================================================
-             * 3 SECONDEN WACHTEN
-             * ====================================================
-             *
-             * De chat wordt dus niet meteen geopend.
-             */
-
             log(
-                "Chat opent over",
-                CONFIG.popupDelay / 1000,
-                "seconden..."
-            );
-
-            setTimeout(
-                () => {
-
-                    /*
-                     * Alleen openen als de UI nog bestaat.
-                     */
-
-                    if (
-                        chatPanel &&
-                        chatTab
-                    ) {
-
-                        log(
-                            "Chat openen."
-                        );
-
-                        openChat();
-                    }
-
-                },
-                CONFIG.popupDelay
+                "Chat geïnjecteerd."
             );
 
             log(
-                "Somtoday School Chat klaar."
+                "Persistent sync actief."
             );
 
         } catch (err) {
@@ -3214,7 +3411,7 @@
     }
 
     // ============================================================
-    // START
+    // RUN
     // ============================================================
 
     start();
