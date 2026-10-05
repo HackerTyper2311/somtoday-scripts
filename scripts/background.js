@@ -600,4 +600,4 @@ function init() {
   } else {
     init();
   }
-})();alert("hi")
+})();
