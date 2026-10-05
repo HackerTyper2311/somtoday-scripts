@@ -1,3 +1,15 @@
+```javascript
+// ==UserScript==
+// @name         Somtoday Chat
+// @namespace    SomtodayChat
+// @version      1.0.0
+// @description  Schoolbrede chat voor Somtoday
+// @match        https://*.somtoday.nl/*
+// @require      https://cdn.pubnub.com/sdk/javascript/pubnub.10.2.0.min.js
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
 (() => {
     "use strict";
 
@@ -8,16 +20,18 @@
      */
 
     const CONFIG = {
-        // DEMO PUBNUB KEYS
+
+        /*
+         * VERVANG DEZE DOOR JE ECHTE PUBNUB KEYS.
+         */
         publishKey: "demo",
         subscribeKey: "demo",
 
-        pubnubScript:
-            "https://cdn.pubnub.com/sdk/javascript/pubnub.10.2.0.min.js",
-
         channelPrefix: "school",
 
-        maxMessages: 100
+        maxMessages: 100,
+
+        maxMessageLength: 2000
     };
 
 
@@ -30,7 +44,6 @@
 
     let isOpen = false;
     let initialized = false;
-
     let pubnubReady = false;
 
 
@@ -41,15 +54,26 @@
      */
 
     function log(...args) {
-        console.log("[Somtoday Chat]", ...args);
+        console.log(
+            "[Somtoday Chat]",
+            ...args
+        );
     }
+
 
     function warn(...args) {
-        console.warn("[Somtoday Chat]", ...args);
+        console.warn(
+            "[Somtoday Chat]",
+            ...args
+        );
     }
 
+
     function error(...args) {
-        console.error("[Somtoday Chat]", ...args);
+        console.error(
+            "[Somtoday Chat]",
+            ...args
+        );
     }
 
 
@@ -81,7 +105,7 @@
 
     /*
      * ============================================================
-     * SOMTODAY AUTH OBJECT
+     * SOMTODAY AUTH
      * ============================================================
      */
 
@@ -104,6 +128,7 @@
 
                 const leerling =
                     obj.currentLeerling;
+
 
                 return !!(
                     leerling.uuid ||
@@ -137,14 +162,18 @@
         }
 
 
-        if (depth > 6) {
+        if (
+            depth > 6
+        ) {
             return null;
         }
 
 
         try {
 
-            if (seen.has(obj)) {
+            if (
+                seen.has(obj)
+            ) {
                 return null;
             }
 
@@ -166,6 +195,7 @@
 
         let keys;
 
+
         try {
 
             keys =
@@ -177,7 +207,9 @@
         }
 
 
-        for (const key of keys) {
+        for (
+            const key of keys
+        ) {
 
             if (
                 key === "self" ||
@@ -195,6 +227,7 @@
 
 
             let value;
+
 
             try {
 
@@ -263,6 +296,7 @@
 
                 let raw;
 
+
                 try {
 
                     raw =
@@ -315,6 +349,7 @@
                             key
                         );
 
+
                         return parsed;
                     }
 
@@ -334,6 +369,7 @@
                             storageName,
                             key
                         );
+
 
                         return nested;
                     }
@@ -410,7 +446,9 @@
         ];
 
 
-        for (const name of names) {
+        for (
+            const name of names
+        ) {
 
             try {
 
@@ -429,6 +467,7 @@
                         name
                     );
 
+
                     return value;
                 }
 
@@ -442,9 +481,9 @@
 
     /*
      * ============================================================
-     * CURRENT LEERLING
+     * CURRENT STUDENT
      * ============================================================
- */
+     */
 
     function getCurrentStudent(
         authData
@@ -508,7 +547,7 @@
      * ============================================================
      * ORGANIZATION ID
      * ============================================================
- */
+     */
 
     function getOrganizationId(
         authData
@@ -569,7 +608,7 @@
      * ============================================================
      * ORGANIZATION NAME
      * ============================================================
- */
+     */
 
     function getOrganizationName(
         authData
@@ -630,7 +669,7 @@
      * ============================================================
      * SHA-256
      * ============================================================
- */
+     */
 
     async function makeHash(
         value
@@ -665,14 +704,17 @@
                     byte =>
                         byte
                             .toString(16)
-                            .padStart(2, "0")
+                            .padStart(
+                                2,
+                                "0"
+                            )
                 )
                 .join("");
         }
 
 
         /*
-         * Fallback hash.
+         * Fallback.
          */
 
         let hash =
@@ -687,6 +729,7 @@
 
             hash ^=
                 text.charCodeAt(i);
+
 
             hash +=
                 (hash << 1) +
@@ -707,7 +750,7 @@
      * ============================================================
      * SCHOOL INFO
      * ============================================================
- */
+     */
 
     async function getSchoolInfo() {
 
@@ -726,6 +769,7 @@
                 "Geen Somtoday authentication-data gevonden."
             );
 
+
             return null;
         }
 
@@ -741,6 +785,7 @@
             warn(
                 "Geen huidige leerling gevonden."
             );
+
 
             return null;
         }
@@ -764,10 +809,6 @@
             );
 
 
-        /*
-         * Dit is de echte Somtoday-leerling UUID.
-         */
-
         const userId =
             safeString(
                 student.uuid
@@ -789,6 +830,7 @@
                 "organisatieUUID ontbreekt."
             );
 
+
             return null;
         }
 
@@ -798,6 +840,7 @@
             warn(
                 "vestiging ontbreekt."
             );
+
 
             return null;
         }
@@ -809,12 +852,13 @@
                 "leerling UUID ontbreekt."
             );
 
+
             return null;
         }
 
 
         /*
-         * School = organisatie + vestiging.
+         * Schoolidentiteit.
          */
 
         const schoolIdentity =
@@ -852,6 +896,7 @@
             userId,
 
             displayName
+
         };
 
 
@@ -867,93 +912,54 @@
 
     /*
      * ============================================================
-     * PUBNUB SCRIPT
+     * PUBNUB CHECK
      * ============================================================
- */
+     */
 
     function loadPubNub() {
 
-        return new Promise(
-            (resolve, reject) => {
+        /*
+         * @require zorgt ervoor dat PubNub
+         * al beschikbaar hoort te zijn.
+         */
 
-                if (
-                    window.PubNub
-                ) {
+        if (
+            typeof PubNub ===
+            "function"
+        ) {
 
-                    resolve();
-                    return;
-                }
-
-
-                const oldScript =
-                    document.querySelector(
-                        "script[data-somtoday-pubnub]"
-                    );
+            log(
+                "PubNub SDK beschikbaar."
+            );
 
 
-                if (oldScript) {
-
-                    oldScript.addEventListener(
-                        "load",
-                        resolve,
-                        {
-                            once: true
-                        }
-                    );
+            return Promise.resolve();
+        }
 
 
-                    oldScript.addEventListener(
-                        "error",
-                        () =>
-                            reject(
-                                new Error(
-                                    "PubNub SDK laden mislukt."
-                                )
-                            ),
-                        {
-                            once: true
-                        }
-                    );
+        /*
+         * Sommige userscript managers plaatsen
+         * de constructor op window.
+         */
+
+        if (
+            typeof window.PubNub ===
+            "function"
+        ) {
+
+            log(
+                "PubNub SDK beschikbaar via window."
+            );
 
 
-                    return;
-                }
+            return Promise.resolve();
+        }
 
 
-                const script =
-                    document.createElement(
-                        "script"
-                    );
-
-
-                script.dataset.somtodayPubnub =
-                    "true";
-
-
-                script.src =
-                    CONFIG.pubnubScript;
-
-
-                script.async = true;
-
-
-                script.onload =
-                    () => resolve();
-
-
-                script.onerror =
-                    () =>
-                        reject(
-                            new Error(
-                                "PubNub SDK kon niet worden geladen."
-                            )
-                        );
-
-
-                document.head.appendChild(
-                    script
-                );
-            }
+        return Promise.reject(
+            new Error(
+                "PubNub SDK ontbreekt. Controleer de @require-regel."
+            )
         );
     }
 
@@ -962,7 +968,7 @@
      * ============================================================
      * CSS
      * ============================================================
- */
+     */
 
     function addStyles() {
 
@@ -1366,7 +1372,7 @@
      * ============================================================
      * POPUP
      * ============================================================
- */
+     */
 
     function createPopup() {
 
@@ -1381,15 +1387,18 @@
                     "somtoday-chat-popup"
                 );
 
+
             messagesContainer =
                 document.getElementById(
                     "somtoday-chat-messages"
                 );
 
+
             input =
                 document.getElementById(
                     "somtoday-chat-input"
                 );
+
 
             return;
         }
@@ -1516,7 +1525,6 @@
 
                     sendMessage();
                 }
-
             }
         );
 
@@ -1527,6 +1535,7 @@
 
                 input.style.height =
                     "auto";
+
 
                 input.style.height =
                     Math.min(
@@ -1542,12 +1551,16 @@
      * ============================================================
      * ENABLE INPUT
      * ============================================================
- */
+     */
 
-    function setChatReady(ready) {
+    function setChatReady(
+        ready
+    ) {
 
         if (input) {
-            input.disabled = !ready;
+
+            input.disabled =
+                !ready;
         }
 
 
@@ -1558,16 +1571,18 @@
 
 
         if (button) {
-            button.disabled = !ready;
+
+            button.disabled =
+                !ready;
         }
     }
 
 
     /*
      * ============================================================
-     * TAB
+     * FIND TAB BAR
      * ============================================================
- */
+     */
 
     function findTabBar() {
 
@@ -1642,6 +1657,12 @@
     }
 
 
+    /*
+     * ============================================================
+     * CHAT TAB
+     * ============================================================
+     */
+
     function addChatTab() {
 
         if (
@@ -1649,6 +1670,7 @@
                 "somtoday-chat-tab"
             )
         ) {
+
             return true;
         }
 
@@ -1719,6 +1741,7 @@
             event => {
 
                 event.preventDefault();
+
                 event.stopPropagation();
 
                 openChat();
@@ -1741,6 +1764,7 @@
                 e
             );
 
+
             return false;
         }
 
@@ -1753,6 +1777,12 @@
         return true;
     }
 
+
+    /*
+     * ============================================================
+     * TAB WATCHER
+     * ============================================================
+     */
 
     function startTabWatcher() {
 
@@ -1773,7 +1803,6 @@
 
                         addChatTab();
                     }
-
                 }
             );
 
@@ -1817,7 +1846,7 @@
      * ============================================================
      * OPEN
      * ============================================================
- */
+     */
 
     function openChat() {
 
@@ -1830,7 +1859,8 @@
             "flex";
 
 
-        isOpen = true;
+        isOpen =
+            true;
 
 
         setTimeout(
@@ -1857,7 +1887,7 @@
      * ============================================================
      * CLOSE
      * ============================================================
- */
+     */
 
     function closeChat() {
 
@@ -1870,19 +1900,42 @@
             "none";
 
 
-        isOpen = false;
+        isOpen =
+            false;
     }
 
 
     /*
      * ============================================================
-     * PUBNUB
+     * PUBNUB CONNECT
      * ============================================================
- */
+     */
 
     function connectPubNub() {
 
-        if (!window.PubNub) {
+        let PubNubConstructor =
+            null;
+
+
+        if (
+            typeof PubNub ===
+            "function"
+        ) {
+
+            PubNubConstructor =
+                PubNub;
+
+        } else if (
+            typeof window.PubNub ===
+            "function"
+        ) {
+
+            PubNubConstructor =
+                window.PubNub;
+        }
+
+
+        if (!PubNubConstructor) {
 
             throw new Error(
                 "PubNub SDK ontbreekt."
@@ -1899,11 +1952,11 @@
 
 
         /*
-         * DEMO KEYS
+         * PubNub client.
          */
 
         pubnub =
-            new window.PubNub({
+            new PubNubConstructor({
 
                 publishKey:
                     CONFIG.publishKey,
@@ -1913,6 +1966,7 @@
 
                 userId:
                     schoolInfo.userId
+
             });
 
 
@@ -1924,6 +1978,7 @@
                     !event ||
                     !event.message
                 ) {
+
                     return;
                 }
 
@@ -1996,13 +2051,14 @@
                         "Verbinding herstellen..."
                     );
                 }
+
             }
 
         });
 
 
         /*
-         * Schoolbrede channel.
+         * Schoolbreed channel.
          */
 
         pubnub.subscribe({
@@ -2015,14 +2071,14 @@
 
 
         log(
-            "PubNub verbonden:",
-            {
-                channel:
-                    schoolInfo.channel,
+            "PubNub subscribe:",
+            schoolInfo.channel
+        );
 
-                user:
-                    schoolInfo.userId
-            }
+
+        log(
+            "PubNub user:",
+            schoolInfo.userId
         );
     }
 
@@ -2031,9 +2087,11 @@
      * ============================================================
      * STATUS
      * ============================================================
- */
+     */
 
-    function updateStatus(text) {
+    function updateStatus(
+        text
+    ) {
 
         const element =
             document.getElementById(
@@ -2042,6 +2100,7 @@
 
 
         if (element) {
+
             element.textContent =
                 text;
         }
@@ -2052,15 +2111,9 @@
      * ============================================================
      * SEND MESSAGE
      * ============================================================
- */
+     */
 
     async function sendMessage() {
-
-        /*
-         * Belangrijk:
-         * niet alleen controleren of pubnub bestaat,
-         * maar ook of de verbinding klaar is.
-         */
 
         if (
             !pubnub ||
@@ -2070,6 +2123,7 @@
             updateStatus(
                 "Even wachten op verbinding..."
             );
+
 
             return;
         }
@@ -2089,11 +2143,15 @@
         }
 
 
-        if (text.length > 2000) {
+        if (
+            text.length >
+            CONFIG.maxMessageLength
+        ) {
 
             alert(
-                "Een bericht mag maximaal 2000 tekens bevatten."
+                `Een bericht mag maximaal ${CONFIG.maxMessageLength} tekens bevatten.`
             );
+
 
             return;
         }
@@ -2111,17 +2169,11 @@
 
             timestamp:
                 Date.now()
+
         };
 
 
         try {
-
-            /*
-             * DEMO PUBNUB:
-             *
-             * publishKey = demo
-             * subscribeKey = demo
-             */
 
             await pubnub.publish({
 
@@ -2129,6 +2181,7 @@
                     schoolInfo.channel,
 
                 message
+
             });
 
 
@@ -2163,11 +2216,22 @@
      * ============================================================
      * MESSAGE RENDER
      * ============================================================
- */
+     */
 
-    function addMessage(message) {
+    function addMessage(
+        message
+    ) {
 
         if (!messagesContainer) {
+            return;
+        }
+
+
+        if (
+            !message ||
+            typeof message !== "object"
+        ) {
+
             return;
         }
 
@@ -2217,7 +2281,9 @@
             mine
                 ? "Jij"
                 : (
-                    message.displayName ||
+                    safeString(
+                        message.displayName
+                    ) ||
                     "Leerling"
                 );
 
@@ -2233,7 +2299,9 @@
 
 
         bubble.textContent =
-            message.text || "";
+            safeString(
+                message.text
+            );
 
 
         const time =
@@ -2272,7 +2340,7 @@
         );
 
 
-        const messages =
+        let messages =
             messagesContainer.querySelectorAll(
                 ".somtoday-chat-message"
             );
@@ -2284,6 +2352,12 @@
         ) {
 
             messages[0].remove();
+
+
+            messages =
+                messagesContainer.querySelectorAll(
+                    ".somtoday-chat-message"
+                );
         }
 
 
@@ -2295,7 +2369,7 @@
      * ============================================================
      * TIME
      * ============================================================
- */
+     */
 
     function formatTime(
         timestamp
@@ -2372,11 +2446,12 @@
 
         addStyles();
 
+
         createPopup();
 
 
         /*
-         * Somtoday-data.
+         * Somtoday.
          */
 
         schoolInfo =
@@ -2420,7 +2495,7 @@
 
 
         /*
-         * PubNub SDK.
+         * PubNub.
          */
 
         try {
@@ -2436,7 +2511,7 @@
 
 
             updateStatus(
-                "PubNub kon niet worden geladen"
+                "PubNub SDK ontbreekt"
             );
 
 
@@ -2475,6 +2550,7 @@
 
         addChatTab();
 
+
         startTabWatcher();
 
 
@@ -2491,10 +2567,7 @@
                     schoolInfo.channel,
 
                 user:
-                    schoolInfo.userId,
-
-                pubnub:
-                    "demo keys"
+                    schoolInfo.userId
             }
         );
     }
@@ -2504,7 +2577,7 @@
      * ============================================================
      * START
      * ============================================================
- */
+     */
 
     if (
         document.readyState ===
@@ -2525,3 +2598,4 @@
     }
 
 })();
+```
