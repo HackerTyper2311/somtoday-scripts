@@ -17,6 +17,7 @@
      * - Offline recovery
      * - Automatic deduplication
      * - Last 100 messages loaded on startup
+     * - Profanity-filter via profanity.dev (verzenden + ontvangen)
      *
      * IMPORTANT
      *
@@ -61,7 +62,17 @@
             true,
 
         debug:
-            true
+            true,
+
+        // Profanity filter (profanity.dev)
+        profanityEnabled:
+            true,
+
+        profanityApi:
+            "https://vector.profanity.dev",
+
+        profanityTimeout:
+            3000
     };
 
     // ============================================================
@@ -103,6 +114,13 @@
      */
 
     const messageMap = new Map();
+
+    /*
+     * Cache met profanity-resultaten per tekst,
+     * zodat dezelfde tekst niet opnieuw wordt opgevraagd.
+     */
+
+    const profanityCache = new Map();
 
     // ============================================================
     // LOGGING
@@ -160,6 +178,101 @@
                     ms
                 )
         );
+    }
+
+    // ============================================================
+    // PROFANITY CHECK (profanity.dev)
+    // ============================================================
+
+    async function isProfane(text) {
+
+        if (!CONFIG.profanityEnabled) {
+            return false;
+        }
+
+        const value = clean(text);
+
+        if (!value) {
+            return false;
+        }
+
+        if (profanityCache.has(value)) {
+            return profanityCache.get(value);
+        }
+
+        try {
+
+            const controller = new AbortController();
+
+            const timer = setTimeout(
+                () => controller.abort(),
+                CONFIG.profanityTimeout
+            );
+
+            const url =
+                `${CONFIG.profanityApi}?message=${encodeURIComponent(value)}`;
+
+            const response = await fetch(
+                url,
+                {
+                    signal: controller.signal
+                }
+            );
+
+            clearTimeout(timer);
+
+            if (!response.ok) {
+
+                throw new Error(
+                    "HTTP " + response.status
+                );
+            }
+
+            const data = await response.json();
+
+            const result =
+                Boolean(data.isProfanity);
+
+            profanityCache.set(
+                value,
+                result
+            );
+
+            return result;
+
+        } catch (err) {
+
+            /*
+             * Fail-open: bij een storing wordt het bericht toegelaten.
+             */
+
+            warn(
+                "Profanity-check mislukt:",
+                err
+            );
+
+            return false;
+        }
+    }
+
+    async function moderateIncoming(message) {
+
+        if (
+            !message ||
+            typeof message !== "object"
+        ) {
+            return message;
+        }
+
+        if (await isProfane(message.text)) {
+
+            return {
+                ...message,
+                text: "⚠️ Bericht verborgen (ongepast taalgebruik)"
+            };
+        }
+
+        return message;
     }
 
     // ============================================================
@@ -1324,7 +1437,7 @@
     // HISTORY RESULT
     // ============================================================
 
-    function handleHistory(data) {
+    async function handleHistory(data) {
 
         syncRunning =
             false;
@@ -1346,12 +1459,19 @@
         );
 
         /*
-         * History wordt opnieuw door addMessage()
-         * gededupliceerd.
+         * Berichten worden eerst gecontroleerd,
+         * daarna pas toegevoegd.
          */
 
+        const moderated =
+            await Promise.all(
+                messages.map(
+                    moderateIncoming
+                )
+            );
+
         for (
-            const message of messages
+            const message of moderated
         ) {
 
             addMessage(
@@ -1458,9 +1578,12 @@
     // SEND MESSAGE
     // ============================================================
 
-    function sendMessage() {
+    async function sendMessage() {
 
-        if (!channel) {
+        if (
+            !channel ||
+            !currentUser
+        ) {
             return;
         }
 
@@ -1481,6 +1604,31 @@
             setStatus(
                 "Bericht is te lang"
             );
+
+            return;
+        }
+
+        sendButton.disabled =
+            true;
+
+        /*
+         * Controleren vóór het verzenden.
+         * De tekst blijft staan zodat de leerling
+         * hem kan aanpassen.
+         */
+
+        if (
+            await isProfane(
+                text
+            )
+        ) {
+
+            setStatus(
+                "Bericht bevat ongepast taalgebruik"
+            );
+
+            sendButton.disabled =
+                false;
 
             return;
         }
@@ -1527,9 +1675,6 @@
             "";
 
         autoResizeInput();
-
-        sendButton.disabled =
-            true;
 
         window.postMessage({
 
@@ -1707,13 +1852,18 @@
     // INCOMING REALTIME MESSAGE
     // ============================================================
 
-    function handleIncomingMessage(
+    async function handleIncomingMessage(
         message
     ) {
 
+        const moderated =
+            await moderateIncoming(
+                message
+            );
+
         const added =
             addMessage(
-                message,
+                moderated,
                 false
             );
 
