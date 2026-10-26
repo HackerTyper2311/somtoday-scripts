@@ -200,21 +200,27 @@
             return profanityCache.get(value);
         }
 
+        let timer = null;
+
         try {
 
             const controller = new AbortController();
 
-            const timer = setTimeout(
+            timer = setTimeout(
                 () => controller.abort(),
                 CONFIG.profanityTimeout
             );
 
-            const url =
-                `${CONFIG.profanityApi}?message=${encodeURIComponent(value)}`;
-
             const response = await fetch(
-                url,
+                CONFIG.profanityApi,
                 {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        message: value
+                    }),
                     signal: controller.signal
                 }
             );
@@ -241,6 +247,10 @@
             return result;
 
         } catch (err) {
+
+            if (timer) {
+                clearTimeout(timer);
+            }
 
             /*
              * Fail-open: bij een storing wordt het bericht toegelaten.
