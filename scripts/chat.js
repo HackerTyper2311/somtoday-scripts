@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.4.0
+     * Versie: 2.6.0
      * ============================================================
      *
      * - Somtoday-style Chat tab
@@ -13,10 +13,9 @@
      * - PubNub realtime messaging + History
      * - LocalStorage cache (versioned, oude data wordt gewist)
      * - Laag 1: lokaal filter (Unicode-normalisatie, lookalikes)
-     * - Laag 1b: spamfilter (lokaal)
+     * - Laag 1b: lengte, links, onleesbare tekens, spam (lokaal)
      * - Duplicaatcontrole: 2 minuten, bij verzenden en ontvangen
-     * - Laag 2: profanity.dev (extern, alleen in modus "lokaal + extern")
-     * - Schakelaar: "alleen lokaal" / "lokaal + extern"
+     * - Laag 2: profanity.dev (extern, altijd actief)
      *
      * PubNub Message Persistence moet aan staan voor
      * cross-device history.
@@ -36,7 +35,7 @@
 
     const CONFIG = {
 
-        version: "2.4.0",
+        version: "2.6.0",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -60,7 +59,7 @@
         // Profanity-filter
         profanityEnabled: true,      // hoofdschakelaar
         profanityLocal: true,        // laag 1: lokaal filter
-        profanityExternal: true,     // laag 2: profanity.dev (alleen in modus "full")
+        profanityExternal: true,     // laag 2: profanity.dev
         profanityApi: "https://vector.profanity.dev",
         profanityTimeout: 3000,
         profanityFailClosed: false,  // true = blokkeren als externe check faalt
@@ -68,18 +67,26 @@
         // Spamfilter
         spamWindowMs: 10000,
         spamMaxPerWindow: 6,
-        spamMaxSame: 3
+        spamMaxSame: 3,
+
+        // Extra filters
+        maxMessageLength: 300,       // langere berichten worden verborgen
+        blockLinks: true,            // links worden verborgen
+        blockForeignScripts: true    // berichten met vooral niet-Latijnse letters
     };
 
     const STORAGE_PREFIX = "somtoday-school-chat";
     const VERSION_KEY = STORAGE_PREFIX + ":version";
-    const MODE_KEY = STORAGE_PREFIX + ":filter-mode";
 
     const HIDDEN_TEXT = "⚠️ Bericht verborgen (ongepast taalgebruik)";
     const HIDDEN_SPAM_TEXT = "⚠️ Bericht verborgen (spam)";
+    const HIDDEN_LONG_TEXT = "⚠️ Bericht verborgen (te lang)";
+    const HIDDEN_LINK_TEXT = "⚠️ Bericht verborgen (link)";
+    const HIDDEN_CHARS_TEXT = "⚠️ Bericht verborgen (onleesbare tekens)";
 
-    const FILTER_MODE_LOCAL = "local";
-    const FILTER_MODE_FULL = "full";
+    function isHiddenText(text) {
+        return String(text || "").startsWith("⚠️ Bericht verborgen");
+    }
 
     // ============================================================
     // STATE
@@ -93,13 +100,11 @@
     let messageInput = null;
     let sendButton = null;
     let statusElement = null;
-    let modeButton = null;
     let chatOpen = false;
     let observer = null;
     let pubnubConnected = false;
     let historyLoaded = false;
     let syncRunning = false;
-    let filterMode = FILTER_MODE_FULL;
 
     /*
      * message.id -> message
@@ -107,7 +112,7 @@
     const messageMap = new Map();
 
     /*
-     * Dubbele-tekst-index: sleutel (afzender + tekst) -> { id, time }
+     * Dubbele-tekst-index: afzender + tekst -> { id, time }
      */
     const seenTexts = new Map();
 
@@ -202,64 +207,6 @@
     }
 
     // ============================================================
-    // FILTERMODUS
-    // ============================================================
-
-    function loadFilterMode() {
-
-        try {
-            const stored = localStorage.getItem(MODE_KEY);
-            filterMode = stored === FILTER_MODE_LOCAL
-                ? FILTER_MODE_LOCAL
-                : FILTER_MODE_FULL;
-        } catch {
-            filterMode = FILTER_MODE_FULL;
-        }
-    }
-
-    function toggleFilterMode() {
-
-        filterMode = filterMode === FILTER_MODE_FULL
-            ? FILTER_MODE_LOCAL
-            : FILTER_MODE_FULL;
-
-        try {
-            localStorage.setItem(MODE_KEY, filterMode);
-        } catch (err) {
-            warn("Filtermodus opslaan mislukt:", err);
-        }
-
-        updateModeButton();
-
-        setStatus(
-            filterMode === FILTER_MODE_LOCAL
-                ? "Filter: alleen lokaal"
-                : "Filter: lokaal + extern"
-        );
-
-        log("Filtermodus:", filterMode);
-    }
-
-    function externalEnabled() {
-        return CONFIG.profanityEnabled &&
-            CONFIG.profanityExternal &&
-            filterMode === FILTER_MODE_FULL;
-    }
-
-    function updateModeButton() {
-
-        if (!modeButton) {
-            return;
-        }
-
-        modeButton.textContent = filterMode === FILTER_MODE_LOCAL
-            ? "Filter: alleen lokaal"
-            : "Filter: lokaal + extern";
-
-        modeButton.title = "Klik om te wisselen";
-    }
-
-    // ============================================================
     // PROFANITY: LAAG 1 (LOKAAL)
     // ============================================================
 
@@ -339,9 +286,9 @@
         // Engels
         "fck", "fk", "fuck", "shit", "bitch", "suck",
 
-        // Racistische termen
+        // Racistische termen en fragmenten
         "neger", "nigga", "niga", "nigger", "nagger",
-        "nija", "ninja"
+        "nija", "ninja", "ngger", "ngr", "negr"
 
     ].map(squashRepeats));
 
@@ -351,7 +298,7 @@
         "klootzak", "kanker", "godverdomme", "godver",
         "scheiss", "scheisse", "schiesse", "sheisse",
         "schijt", "flikker", "mongool", "balzak", "piemel",
-        "neger",
+        "neger", "negr",
 
         // Engels
         "fuck", "bastard", "faggot", "fagot", "cocksuck",
@@ -384,6 +331,67 @@
                 compactRaw.includes(term) ||
                 compactSquashed.includes(term)
         );
+    }
+
+    // ============================================================
+    // EXTRA FILTERS (LOKAAL)
+    // ============================================================
+
+    const LINK_PATTERN =
+        /(https?:\/\/|www\.|[a-z0-9-]+\.(com|nl|net|org|io|xyz|gg|tv|me|be|co|app|site|ly)\b)/i;
+
+    function containsLink(text) {
+        return CONFIG.blockLinks && LINK_PATTERN.test(clean(text));
+    }
+
+    /*
+     * True als de tekst vooral uit niet-Latijnse letters bestaat,
+     * bijvoorbeeld katakana of Cyrillisch. NFKC eerst, zodat
+     * vette en fullwidth-letters als Latijns tellen.
+     */
+    function isMostlyForeign(text) {
+
+        if (!CONFIG.blockForeignScripts) {
+            return false;
+        }
+
+        const letters = Array.from(clean(text).normalize("NFKC"))
+            .filter(ch => /\p{L}/u.test(ch));
+
+        if (letters.length < 3) {
+            return false;
+        }
+
+        const foreign = letters.filter(ch => !/[A-Za-z\u00C0-\u024F]/.test(ch));
+
+        return foreign.length / letters.length > 0.3;
+    }
+
+    /*
+     * Geeft de melding terug als een bericht verborgen moet worden,
+     * anders null.
+     */
+    function moderationNotice(text) {
+
+        const raw = clean(text);
+
+        if (raw.length > CONFIG.maxMessageLength) {
+            return HIDDEN_LONG_TEXT;
+        }
+
+        if (containsLink(raw)) {
+            return HIDDEN_LINK_TEXT;
+        }
+
+        if (isMostlyForeign(raw)) {
+            return HIDDEN_CHARS_TEXT;
+        }
+
+        if (CONFIG.profanityLocal && containsProfanityLocal(raw)) {
+            return HIDDEN_TEXT;
+        }
+
+        return null;
     }
 
     // ============================================================
@@ -547,8 +555,7 @@
     }
 
     /*
-     * Volledige controle bij verzenden.
-     * Lokaal eerst; extern alleen in modus "lokaal + extern".
+     * Volledige controle bij verzenden: lokaal, daarna extern.
      */
     async function isProfane(text) {
 
@@ -560,7 +567,7 @@
             return true;
         }
 
-        if (!externalEnabled()) {
+        if (!CONFIG.profanityExternal) {
             return false;
         }
 
@@ -575,8 +582,7 @@
 
     /*
      * Synchrone lokale controle voor binnenkomende berichten.
-     * Bekende berichten en dubbele berichten worden niet opnieuw
-     * beoordeeld hier; de duplicaatcontrole zit in addMessage.
+     * Bekende berichten worden niet opnieuw beoordeeld.
      */
     function moderateIncoming(message) {
 
@@ -588,22 +594,21 @@
             return message;
         }
 
-        if (
-            message.text === HIDDEN_TEXT ||
-            message.text === HIDDEN_SPAM_TEXT
-        ) {
+        if (isHiddenText(message.text)) {
             return message;
         }
 
-        if (
-            CONFIG.profanityEnabled &&
-            CONFIG.profanityLocal &&
-            containsProfanityLocal(message.text)
-        ) {
-            return { ...message, text: HIDDEN_TEXT };
+        if (!CONFIG.profanityEnabled) {
+            return message;
         }
 
-        if (CONFIG.profanityEnabled && isSpam(message)) {
+        const notice = moderationNotice(message.text);
+
+        if (notice) {
+            return { ...message, text: notice };
+        }
+
+        if (isSpam(message)) {
             return { ...message, text: HIDDEN_SPAM_TEXT };
         }
 
@@ -618,7 +623,7 @@
 
         const existing = messageMap.get(id);
 
-        if (!existing || existing.text === HIDDEN_TEXT) {
+        if (!existing || isHiddenText(existing.text)) {
             return;
         }
 
@@ -634,10 +639,10 @@
     function scheduleExternalCheck(message) {
 
         if (
-            !externalEnabled() ||
+            !CONFIG.profanityEnabled ||
+            !CONFIG.profanityExternal ||
             !message ||
-            message.text === HIDDEN_TEXT ||
-            message.text === HIDDEN_SPAM_TEXT
+            isHiddenText(message.text)
         ) {
             return;
         }
@@ -720,7 +725,7 @@
                 return;
             }
 
-            for (const message of sortByTime(messages)) {
+            for (const message of sortByTime([...messages])) {
                 addMessage(moderateIncoming(message), false);
             }
 
@@ -1343,6 +1348,20 @@
             return;
         }
 
+        /*
+         * Lokale controles: lengte, links, tekens, scheldwoorden.
+         */
+
+        const sendNotice = moderationNotice(text);
+
+        if (sendNotice) {
+            setStatus(
+                "Bericht niet verstuurd: " +
+                sendNotice.replace("⚠️ Bericht verborgen ", "")
+            );
+            return;
+        }
+
         const now = Date.now();
 
         /*
@@ -1365,6 +1384,8 @@
             setStatus("Even wachten: te veel berichten of spam");
             return;
         }
+
+        setStatus("Controleren...");
 
         if (await isProfane(text)) {
             setStatus("Bericht bevat ongepast taalgebruik");
@@ -1395,6 +1416,8 @@
                 message: message
             }
         }, "*");
+
+        setStatus("Verbonden");
 
         setTimeout(() => {
 
@@ -1448,9 +1471,7 @@
             return false;
         }
 
-        const now = Date.now();
-
-        pruneSeenTexts(now);
+        pruneSeenTexts(Date.now());
 
         if (
             isRecentDuplicate(
@@ -1682,26 +1703,6 @@
             }
             .somtoday-chat-title { font-size: 18px; font-weight: 600; line-height: 22px; }
             .somtoday-chat-school { font-size: 12px; line-height: 16px; color: var(--text-weak, #777); }
-            .somtoday-chat-header-right {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-            }
-            .somtoday-chat-mode {
-                height: 30px;
-                padding: 0 10px;
-                border: 1px solid var(--border-neutral-normal, #d6d6d6);
-                border-radius: 6px;
-                background: var(--bg-neutral-none, #fff);
-                color: var(--text-strong, #222);
-                font-family: inherit;
-                font-size: 12px;
-                cursor: pointer;
-                white-space: nowrap;
-            }
-            .somtoday-chat-mode:hover {
-                background: var(--bg-neutral-weakest, #f3f3f3);
-            }
             .somtoday-chat-header-status {
                 display: flex;
                 align-items: center;
@@ -1930,7 +1931,6 @@
         messageInput = document.getElementById("somtoday-chat-input");
         sendButton = document.getElementById("somtoday-chat-send");
         statusElement = document.getElementById("somtoday-chat-status");
-        modeButton = document.getElementById("somtoday-chat-mode");
     }
 
     function createChatPanel() {
@@ -1945,7 +1945,6 @@
 
             chatPanel = existing;
             bindPanelElements();
-            updateModeButton();
 
             return existing;
         }
@@ -1960,12 +1959,9 @@
                     <div class="somtoday-chat-title">School Chat</div>
                     <div class="somtoday-chat-school" id="somtoday-chat-school"></div>
                 </div>
-                <div class="somtoday-chat-header-right">
-                    <button id="somtoday-chat-mode" class="somtoday-chat-mode" type="button"></button>
-                    <div class="somtoday-chat-header-status">
-                        <span class="somtoday-chat-status-dot"></span>
-                        <span id="somtoday-chat-status">Verbinden...</span>
-                    </div>
+                <div class="somtoday-chat-header-status">
+                    <span class="somtoday-chat-status-dot"></span>
+                    <span id="somtoday-chat-status">Verbinden...</span>
                 </div>
             </div>
             <div class="somtoday-chat-messages" id="somtoday-chat-messages"></div>
@@ -1987,7 +1983,6 @@
             school.textContent = currentUser?.vestiging || "School";
         }
 
-        modeButton.addEventListener("click", toggleFilterMode);
         sendButton.addEventListener("click", sendMessage);
 
         messageInput.addEventListener("keydown", event => {
@@ -2000,7 +1995,6 @@
 
         messageInput.addEventListener("input", autoResizeInput);
 
-        updateModeButton();
         renderAllMessages();
 
         return panel;
@@ -2262,7 +2256,6 @@
             log("Somtoday School Chat " + CONFIG.version + " starten...");
 
             purgeOldData();
-            loadFilterMode();
 
             injectStyles();
 
