@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.1.0
+     * Versie: 2.2.0
      * ============================================================
      *
      * - Somtoday-style Chat tab
@@ -13,7 +13,7 @@
      * - PubNub realtime messaging + History
      * - LocalStorage cache (versioned, oude data wordt gewist)
      * - Deduplicatie
-     * - Laag 1: lokale woordenlijst (synchroon, altijd)
+     * - Laag 1: lokale filter met Unicode-normalisatie (synchroon, altijd)
      * - Laag 2: profanity.dev (extern, configureerbaar)
      *
      * PubNub Message Persistence moet aan staan voor
@@ -34,7 +34,7 @@
 
     const CONFIG = {
 
-        version: "2.1.0",
+        version: "2.2.0",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -178,41 +178,48 @@
         return text.replace(/(.)\1+/g, "$1");
     }
 
-    const PROFANITY_EXACT = new Set([
+    /*
+     * Lookalike-tekens (Cyrillisch, Armeens, Canadees Syllabisch)
+     * die Unicode-normalisatie niet naar a-z brengt.
+     */
+    const CONFUSABLES = {
+        // Cyrillisch
+        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
+        "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
+        "к": "k", "н": "h", "т": "t", "м": "m", "в": "b",
+        "ԁ": "d", "ԛ": "q", "ԝ": "w",
 
-        // Nederlands
-        "kut", "lul", "hoer", "fok", "fuk", "shi", "gvd", "kkr",
+        // Overig
+        "ą": "a", "ƒ": "f", "մ": "u", "ç": "c", "ʂ": "s",
+        "ҟ": "k",
 
-        // Engels
-        "fck", "fk", "fuck", "shit", "bitch",
+        // Canadees Syllabisch
+        "ᔕ": "s", "ᑌ": "u", "ᑕ": "c", "ᗰ": "m", "ᗩ": "a",
+        "ᗴ": "e", "ᗝ": "o", "ᑭ": "p", "ᖇ": "r", "ᒪ": "l",
+        "ᐯ": "v", "ᖴ": "f", "ᕼ": "h", "ᑎ": "n", "ᗷ": "b",
+        "ᔓ": "s", "ᒍ": "j", "ᘿ": "g"
+    };
 
-        // Racistische termen
-        "neger", "nigga", "niga", "nigger", "nagger"
+    /*
+     * Zet een tekst om naar gewone kleine letters a-z.
+     * Scheidingstekens worden spaties, zodat "f.u.c.k" en
+     * "f-u-c-k" hetzelfde worden als "fuck".
+     */
+    function foldText(text) {
 
-    ].map(squashRepeats));
-
-    const PROFANITY_CONTAINS = [
-
-        // Nederlands
-        "klootzak", "kanker", "godverdomme", "godver",
-        "scheiss", "scheisse", "schiesse", "sheisse",
-        "schijt", "flikker", "mongool",
-
-        // Engels
-        "fuck", "bastard",
-
-        // Racistische termen
-        "nigger", "nigga", "nagger"
-
-    ].map(squashRepeats);
-
-    function normalizeForProfanity(text) {
-
-        return clean(text)
+        let folded = clean(text)
+            .normalize("NFKC")                 // 𝓯𝓾𝓬𝓴, ｆｕｃｋ, ⓕ → f
             .toLowerCase()
             .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replace(/ß/g, "ss")
+            .replace(/[\u0300-\u036f]/g, "")   // accenten
+            .replace(/[\u00ad\u200b-\u200f\u2060-\u206f\ufeff]/g, "") // onzichtbare tekens
+            .replace(/ß/g, "ss");
+
+        folded = Array.from(folded)
+            .map(ch => CONFUSABLES[ch] || ch)
+            .join("");
+
+        return folded
             .replace(/@/g, "a")
             .replace(/4/g, "a")
             .replace(/3/g, "e")
@@ -224,26 +231,75 @@
             .trim();
     }
 
+    /*
+     * PROFANITY_EXACT: losse woorden (na samenvoegen van herhalingen).
+     * PROFANITY_CONTAINS: termen die ook binnen aaneengeschreven
+     * tekst worden gevonden, bijvoorbeeld "balzakneger".
+     */
+
+    const PROFANITY_EXACT = new Set([
+
+        // Nederlands
+        "kut", "lul", "hoer", "fok", "fuk", "shi", "gvd", "kkr",
+        "piemel", "dick", "dik", "dih", "cuck", "cock", "fag",
+
+        // Engels
+        "fck", "fk", "fuck", "shit", "bitch",
+
+        // Racistische termen
+        "neger", "nigga", "niga", "nigger", "nagger",
+        "nija", "ninja"
+
+    ].map(squashRepeats));
+
+    const PROFANITY_CONTAINS = [
+
+        // Nederlands
+        "klootzak", "kanker", "godverdomme", "godver",
+        "scheiss", "scheisse", "schiesse", "sheisse",
+        "schijt", "flikker", "mongool", "balzak", "piemel",
+        "neger",
+
+        // Engels
+        "fuck", "bastard", "faggot", "fagot", "cocksuck",
+
+        // Racistische termen
+        "nigger", "nigga", "niga", "ngga", "nagger"
+    ];
+
     function containsProfanityLocal(text) {
 
-        const normalized = normalizeForProfanity(text);
+        const folded = foldText(text);
 
-        if (!normalized) {
+        if (!folded) {
             return false;
         }
 
-        const words = normalized
+        const words = folded
             .split(" ")
-            .filter(Boolean)
-            .map(squashRepeats);
+            .filter(Boolean);
 
-        if (words.some(word => PROFANITY_EXACT.has(word))) {
+        if (
+            words.some(
+                word => PROFANITY_EXACT.has(squashRepeats(word))
+            )
+        ) {
             return true;
         }
 
-        const compact = squashRepeats(words.join(""));
+        /*
+         * Twee varianten van de aaneengeschreven tekst:
+         * - zoals hij is (vangt "nigga")
+         * - met herhalingen samengevoegd (vangt "niiigggaaa")
+         */
+        const compactRaw = words.join("");
+        const compactSquashed = squashRepeats(compactRaw);
 
-        return PROFANITY_CONTAINS.some(term => compact.includes(term));
+        return PROFANITY_CONTAINS.some(
+            term =>
+                compactRaw.includes(term) ||
+                compactSquashed.includes(term)
+        );
     }
 
     // ============================================================
@@ -377,7 +433,7 @@
     }
 
     /*
-     * Achtergrondcontrole extern. Bericht blijft eerst zichtbaar,
+     * Achtergrondcontrole extern. Het bericht blijft eerst zichtbaar
      * en wordt verborgen als de dienst het afkeurt.
      */
     function hideMessage(id) {
