@@ -13,6 +13,7 @@
 
   var TAB = 'sl-account-modal-tab';
   var MARK = 'data-mod-tab';
+  var API_TAB_MARK = 'data-sl-api-tab';
   var LABEL = 'SomToday MOD 2.0';
   var PANEL_ID = 'somtoday-mod-panel';
 
@@ -211,7 +212,7 @@
   function toast(msg) {
     try {
       var t = document.createElement('div');
-      t.textContent = msg;
+      t.textContent = String(msg);
 
       t.style.cssText =
         'position:fixed;left:12px;bottom:12px;z-index:2147483647;' +
@@ -257,11 +258,11 @@
     }
 
     try {
-      var el = document.createElement('script');
-      el.textContent = src;
+      var script = document.createElement('script');
+      script.textContent = src;
 
-      (document.head || root).appendChild(el);
-      el.remove();
+      (document.head || root).appendChild(script);
+      script.remove();
 
       if (ran()) {
         log('Ran ' + name + ' (inline script)');
@@ -298,11 +299,85 @@
     return n;
   }
 
-  /* ---------- MOD 2.0 tab ---------- */
+  /* ---------- Somtoday tab helpers ---------- */
+  var $ = function (sel, root) {
+    return (root || document).querySelector(sel);
+  };
+
+  var getNav = function () {
+    return $('sl-account-modal nav');
+  };
+
+  var getDetails = function () {
+    return $('sl-account-modal-details');
+  };
+
+  var getContent = function () {
+    return $('sl-account-modal-details > .content');
+  };
+
+  var getModTab = function () {
+    return $('sl-account-modal-tab[' + MARK + ']');
+  };
+
+  var getApiTab = function (id) {
+    var tabs = document.querySelectorAll(
+      'sl-account-modal-tab[' + API_TAB_MARK + ']'
+    );
+
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].getAttribute(API_TAB_MARK) === id) return tabs[i];
+    }
+
+    return null;
+  };
+
+  function setSelected(tab, selected) {
+    if (!tab) return;
+
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+  }
+
+  function selectOnlyTab(selectedTab) {
+    var nav = getNav();
+    if (!nav) return;
+
+    nav.querySelectorAll(TAB).forEach(function (tab) {
+      setSelected(tab, tab === selectedTab);
+    });
+  }
+
+  /* ---------- MOD 2.0 state ---------- */
   var availableMods = null;
   var modOpen = false;
   var originalTitle = null;
 
+  /* ---------- registered API tabs ---------- */
+  var apiTabs = Object.create(null);
+  var apiTabCounter = 0;
+  var activeApiTab = null;
+
+  function apiPanelId(id) {
+    return apiTabs[id] ? apiTabs[id].panelId : null;
+  }
+
+  function getApiPanel(id) {
+    var panelId = apiPanelId(id);
+    return panelId ? document.getElementById(panelId) : null;
+  }
+
+  function getBaseTabs() {
+    var nav = getNav();
+    if (!nav) return [];
+
+    return Array.from(nav.querySelectorAll(TAB)).filter(function (tab) {
+      return !tab.hasAttribute(MARK) &&
+        !tab.hasAttribute(API_TAB_MARK);
+    });
+  }
+
+  /* ---------- styles ---------- */
   var MOD_CSS = [
     '#' + PANEL_ID + ' { padding: 8px 0; font-family: inherit; color: var(--fg-neutral-strong, #222); }',
 
@@ -316,25 +391,18 @@
 
     '.sl-mod-label { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 20px; color: var(--fg-neutral-strong, #222); overflow-wrap: anywhere; }',
 
-    /* Slider container */
     '.sl-mod-switch { display: inline-block; position: relative; flex: 0 0 auto; width: 44px; height: 24px; cursor: pointer; -webkit-tap-highlight-color: transparent; }',
 
-    /* Smooth dark track */
     '.sl-mod-switch-track { position: absolute; inset: 0; box-sizing: border-box; background: #343a46; border: 1px solid #687386; border-radius: 50px; transition: background .25s ease, border-color .25s ease, box-shadow .25s ease; }',
 
-    /* Smooth blue gradient when enabled */
     '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-track { background: linear-gradient(135deg, #60a5fa, #2563eb); border-color: #60a5fa; box-shadow: 0 0 10px rgba(37,99,235,.25); }',
 
-    /* Hover */
     '.sl-mod-row:hover .sl-mod-switch-track { border-color: #60a5fa; }',
 
-    /* Knob */
     '.sl-mod-switch-knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #aab4c3; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .25s cubic-bezier(.2,.8,.2,1), background-color .25s ease, box-shadow .25s ease; }',
 
-    /* Knob slides right when enabled */
     '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-knob { transform: translateX(20px); background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2); }',
 
-    /* Reduced motion accessibility */
     '@media (prefers-reduced-motion: reduce) { .sl-mod-switch-track, .sl-mod-switch-knob, .sl-mod-row { transition: none !important; } }',
 
     '.sl-mod-note { display: none; padding: 12px 24px 0; font-size: 13px; color: var(--fg-neutral-moderate, #666); }',
@@ -358,7 +426,95 @@
     s.textContent = MOD_CSS;
   }
 
-  /* ---------- switch ---------- */
+  /* ---------- public API ---------- */
+  function registerTab(options) {
+    if (!options || typeof options !== 'object') {
+      throw new TypeError('registerTab expects an options object');
+    }
+
+    var id = String(options.id || '').trim();
+    var label = String(options.label || '').trim();
+    var render = options.render;
+
+    if (!id) {
+      throw new TypeError('A tab id is required');
+    }
+
+    if (!label) {
+      throw new TypeError('A tab label is required');
+    }
+
+    if (typeof render !== 'function') {
+      throw new TypeError('Tab render must be a function');
+    }
+
+    var existing = apiTabs[id];
+
+    if (existing) {
+      existing.label = label;
+      existing.render = render;
+    } else {
+      apiTabs[id] = {
+        id: id,
+        label: label,
+        render: render,
+        panelId: 'somtoday-api-tab-panel-' + (++apiTabCounter)
+      };
+    }
+
+    injectApiTab(id);
+
+    if (activeApiTab === id) {
+      renderApiTab(id);
+    }
+
+    return function () {
+      unregisterTab(id);
+    };
+  }
+
+  function unregisterTab(id) {
+    id = String(id);
+
+    var definition = apiTabs[id];
+    if (!definition) return false;
+
+    if (activeApiTab === id) {
+      closeMod();
+    }
+
+    var tab = getApiTab(id);
+    if (tab) tab.remove();
+
+    var panel = document.getElementById(definition.panelId);
+    if (panel) panel.remove();
+
+    delete apiTabs[id];
+
+    return true;
+  }
+
+  function getEnabledMods() {
+    return Object.keys(getEnabledMap()).filter(function (name) {
+      return isEnabled(name);
+    });
+  }
+
+  function isModEnabled(name) {
+    return isEnabled(String(name));
+  }
+
+  var publicAPI = {
+    registerTab: registerTab,
+    unregisterTab: unregisterTab,
+    getEnabledMods: getEnabledMods,
+    isModEnabled: isModEnabled,
+    toast: toast
+  };
+
+  window.SomtodayMods = publicAPI;
+
+  /* ---------- MOD 2.0 switch ---------- */
   function buildToggle(on) {
     var host = document.createElement('span');
     host.className = 'sl-mod-switch';
@@ -386,7 +542,6 @@
     };
   }
 
-  /* ---------- rows ---------- */
   function buildRow(f, note) {
     var on = isEnabled(f.name);
     var name = modLabel(f.name);
@@ -479,51 +634,180 @@
     panel.appendChild(note);
   }
 
-  /* ---------- Somtoday tab helpers ---------- */
-  const $ = (sel, root = document) => root.querySelector(sel);
-  const getNav = () => $('sl-account-modal nav');
-  const getDetails = () => $('sl-account-modal-details');
-  const getContent = () => $('sl-account-modal-details > .content');
-  const getModTab = () => $(`${TAB}[${MARK}]`);
-
-  function setSelected(tab, selected) {
-    tab.classList.toggle('active', selected);
-    tab.setAttribute('aria-selected', String(selected));
-  }
-
+  /* ---------- inject MOD 2.0 tab ---------- */
   function injectTab() {
-    const nav = getNav();
+    var nav = getNav();
     if (!nav || getModTab()) return;
 
-    const tabs = [...nav.querySelectorAll(`${TAB}:not([${MARK}])`)];
+    var tabs = getBaseTabs();
     if (!tabs.length) return;
 
-    const template = tabs.find(t => !t.classList.contains('active')) || tabs[0];
-    const clone = template.cloneNode(true);
+    var template = tabs.find(function (t) {
+      return !t.classList.contains('active');
+    }) || tabs[0];
 
+    var clone = template.cloneNode(true);
+
+    clone.removeAttribute('id');
     clone.setAttribute(MARK, '1');
     setSelected(clone, false);
 
-    const span = clone.querySelector('span');
+    var span = clone.querySelector('span');
     if (span) span.textContent = LABEL;
+    else clone.textContent = LABEL;
 
     tabs[tabs.length - 1].after(clone);
   }
 
+  /* ---------- inject registered API tabs ---------- */
+  function injectApiTab(id) {
+    var definition = apiTabs[id];
+    var nav = getNav();
+
+    if (!definition || !nav) return;
+
+    var existing = getApiTab(id);
+
+    if (existing) {
+      var existingSpan = existing.querySelector('span');
+      if (existingSpan) existingSpan.textContent = definition.label;
+      else existing.textContent = definition.label;
+      return;
+    }
+
+    var tabs = getBaseTabs();
+    if (!tabs.length) return;
+
+    var template = tabs.find(function (t) {
+      return !t.classList.contains('active');
+    }) || tabs[0];
+
+    var clone = template.cloneNode(true);
+
+    clone.removeAttribute('id');
+    clone.setAttribute(API_TAB_MARK, id);
+    setSelected(clone, false);
+
+    var span = clone.querySelector('span');
+    if (span) span.textContent = definition.label;
+    else clone.textContent = definition.label;
+
+    var modTab = getModTab();
+
+    if (modTab && modTab.parentNode === nav) {
+      modTab.after(clone);
+    } else {
+      tabs[tabs.length - 1].after(clone);
+    }
+  }
+
+  function injectApiTabs() {
+    Object.keys(apiTabs).forEach(function (id) {
+      injectApiTab(id);
+    });
+  }
+
+  /* ---------- API tab rendering ---------- */
+  function renderApiTab(id) {
+    var definition = apiTabs[id];
+    if (!definition || activeApiTab !== id) return;
+
+    var content = getContent();
+    var details = getDetails();
+    if (!content || !details) return;
+
+    var panel = getApiPanel(id);
+
+    if (!panel) {
+      panel = el('div', {
+        id: definition.panelId,
+        class: 'somtoday-api-tab-panel'
+      });
+
+      content.after(panel);
+    }
+
+    panel.textContent = '';
+
+    try {
+      definition.render(panel, publicAPI);
+    } catch (e) {
+      console.error('[Somtoday Loader] API tab "' + id + '" failed to render:', e);
+
+      panel.textContent = '';
+      panel.appendChild(el('div', {
+        class: 'sl-mod-empty',
+        text: 'Deze tab kon niet worden weergegeven. Zie de console voor details.'
+      }));
+    }
+  }
+
+  /* ---------- open API tab ---------- */
+  function openApiTab(id) {
+    var definition = apiTabs[id];
+    var tab = getApiTab(id);
+    var content = getContent();
+    var details = getDetails();
+    var nav = getNav();
+
+    if (!definition || !tab || !content || !details || !nav) return;
+
+    injectModStyles();
+
+    modOpen = false;
+    activeApiTab = id;
+
+    selectOnlyTab(tab);
+
+    var title = details.querySelector('.title');
+
+    if (title) {
+      if (originalTitle === null) originalTitle = title.textContent;
+      title.textContent = definition.label;
+    }
+
+    content.style.display = 'none';
+
+    var modPanel = document.getElementById(PANEL_ID);
+    if (modPanel) modPanel.style.display = 'none';
+
+    Object.keys(apiTabs).forEach(function (otherId) {
+      var otherPanel = getApiPanel(otherId);
+      if (otherPanel) otherPanel.style.display = 'none';
+    });
+
+    var panel = getApiPanel(id);
+
+    if (!panel) {
+      panel = el('div', {
+        id: definition.panelId,
+        class: 'somtoday-api-tab-panel'
+      });
+
+      content.after(panel);
+    }
+
+    panel.style.display = '';
+    renderApiTab(id);
+  }
+
+  /* ---------- open MOD 2.0 ---------- */
   function openMod() {
-    const content = getContent();
-    const details = getDetails();
-    const nav = getNav();
+    var content = getContent();
+    var details = getDetails();
+    var nav = getNav();
 
     if (!content || !details || !nav) return;
 
     injectModStyles();
+
     modOpen = true;
+    activeApiTab = null;
 
-    const modTab = getModTab();
-    nav.querySelectorAll(TAB).forEach(t => setSelected(t, t === modTab));
+    var modTab = getModTab();
+    selectOnlyTab(modTab);
 
-    const title = details.querySelector('.title');
+    var title = details.querySelector('.title');
 
     if (title) {
       if (originalTitle === null) originalTitle = title.textContent;
@@ -532,7 +816,14 @@
 
     content.style.display = 'none';
 
-    let panel = document.getElementById(PANEL_ID);
+    var apiIds = Object.keys(apiTabs);
+
+    apiIds.forEach(function (id) {
+      var panel = getApiPanel(id);
+      if (panel) panel.style.display = 'none';
+    });
+
+    var panel = document.getElementById(PANEL_ID);
 
     if (!panel) {
       panel = el('div', { id: PANEL_ID });
@@ -543,44 +834,83 @@
     renderPanel();
   }
 
+  /* ---------- close custom tabs ---------- */
   function closeMod(newTitle) {
-    const modTab = getModTab();
+    var wasOpen = modOpen || activeApiTab !== null;
+
+    modOpen = false;
+    activeApiTab = null;
+
+    var modTab = getModTab();
     if (modTab) setSelected(modTab, false);
 
-    if (!modOpen) return;
-    modOpen = false;
+    Object.keys(apiTabs).forEach(function (id) {
+      var tab = getApiTab(id);
+      if (tab) setSelected(tab, false);
 
-    const content = getContent();
+      var panel = getApiPanel(id);
+      if (panel) panel.style.display = 'none';
+    });
+
+    var modPanel = document.getElementById(PANEL_ID);
+    if (modPanel) modPanel.style.display = 'none';
+
+    var content = getContent();
     if (content) content.style.display = '';
 
-    const panel = document.getElementById(PANEL_ID);
-    if (panel) panel.style.display = 'none';
+    var title = $('sl-account-modal-details .title');
 
-    const title = $('sl-account-modal-details .title');
-    if (title) title.textContent = newTitle || originalTitle || title.textContent;
+    if (title && originalTitle !== null) {
+      title.textContent = newTitle || originalTitle;
+    }
 
-    originalTitle = null;
+    if (wasOpen || originalTitle !== null) {
+      originalTitle = null;
+    }
   }
 
-  // Capture phase without stopping events, so Angular tabs can still work.
+  /* ---------- click handling ---------- */
   document.addEventListener('click', function (e) {
-    const target = e.target;
-    const tab = target && target.closest ? target.closest(TAB) : null;
+    var target = e.target;
+    var tab = target && target.closest ? target.closest(TAB) : null;
+
     if (!tab) return;
 
-    if (tab.hasAttribute(MARK)) openMod();
-    else closeMod(tab.querySelector('span')?.textContent.trim());
+    if (tab.hasAttribute(MARK)) {
+      openMod();
+      return;
+    }
+
+    if (tab.hasAttribute(API_TAB_MARK)) {
+      openApiTab(tab.getAttribute(API_TAB_MARK));
+      return;
+    }
+
+    closeMod(
+      tab.querySelector('span')?.textContent.trim() ||
+      tab.textContent.trim()
+    );
   }, true);
 
+  /* ---------- keyboard handling ---------- */
   document.addEventListener('keydown', function (e) {
-    if ((e.key === 'Enter' || e.key === ' ') &&
-        e.target.matches?.(`${TAB}[${MARK}]`)) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+
+    var target = e.target;
+
+    if (!target || !target.matches) return;
+
+    if (
+      target.matches(TAB + '[' + MARK + ']') ||
+      target.matches(TAB + '[' + API_TAB_MARK + ']')
+    ) {
       e.preventDefault();
-      openMod();
+      target.click();
     }
   }, true);
 
-  let scheduled = false;
+  /* ---------- DOM observer ---------- */
+  var scheduled = false;
 
   function schedule() {
     if (scheduled) return;
@@ -588,18 +918,36 @@
 
     requestAnimationFrame(function () {
       scheduled = false;
-      injectTab();
 
-      if (modOpen && !getModTab()) closeMod();
+      injectTab();
+      injectApiTabs();
+
+      if (modOpen && !getModTab()) {
+        closeMod();
+      }
+
+      if (activeApiTab !== null && !getApiTab(activeApiTab)) {
+        closeMod();
+      }
     });
   }
 
-  new MutationObserver(schedule).observe(document.body, {
-    childList: true,
-    subtree: true
-  });
+  function startObserver() {
+    if (!document.body) {
+      requestAnimationFrame(startObserver);
+      return;
+    }
 
-  injectTab();
+    new MutationObserver(schedule).observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    injectTab();
+    injectApiTabs();
+  }
+
+  startObserver();
 
   /* ---------- main: load only enabled mods ---------- */
   var cache = loadCache();
