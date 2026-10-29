@@ -210,6 +210,7 @@
    * The switch itself is drawn with inline styles (see buildToggle), so it
    * does not depend on Somtoday's CSS being loaded.
    */
+ 
   var MOD_CSS = [
     '#' + PANEL_ID + ' { padding: 8px 0; font-family: inherit; color: var(--fg-neutral-strong, #222); }',
     '.sl-mod-intro { padding: 8px 24px 12px; font-size: 13px; line-height: 18px; color: var(--fg-neutral-moderate, #666); }',
@@ -217,10 +218,17 @@
     '.sl-mod-row:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)); }',
     '.sl-mod-row:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4); outline-offset: -2px; }',
     '.sl-mod-label { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 20px; color: var(--fg-neutral-strong, #222); overflow-wrap: anywhere; }',
+    '.sl-mod-switch { display: inline-block; position: relative; flex: 0 0 auto; width: 44px; height: 24px; cursor: pointer; -webkit-tap-highlight-color: transparent; }',
+    '.sl-mod-switch-track { position: absolute; inset: 0; box-sizing: border-box; background: var(--bg-neutral-none, transparent); border: 2px solid var(--border-neutral-normal, #999); border-radius: 50px; transition: background-color .2s ease, border-color .2s ease; }',
+    '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-track { background: var(--bg-primary-normal, var(--action-primary-normal, #3565d4)); border-color: var(--border-primary-strong, var(--action-primary-normal, #3565d4)); }',
+    '.sl-mod-row:hover .sl-mod-switch-track { border-color: var(--border-primary-strong, var(--action-primary-normal, #3565d4)); }',
+    '.sl-mod-switch-knob { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--border-neutral-normal, #999); box-shadow: 0 1px 2px rgba(0,0,0,.16); transition: transform .2s ease, background-color .2s ease; }',
+    '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-knob { transform: translateX(20px); background: #fff; }',
     '.sl-mod-note { display: none; padding: 12px 24px 0; font-size: 13px; color: var(--fg-neutral-moderate, #666); }',
     '.sl-mod-note button { margin-left: 12px; cursor: pointer; background: transparent; color: inherit; border: 1px solid rgba(128,128,128,.6); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px; }',
     '.sl-mod-empty { padding: 16px 24px; font-size: 14px; color: var(--fg-neutral-moderate, #666); }'
   ].join('\n');
+
 
   function injectModStyles() {
     if (document.getElementById('somtoday-mod-style')) return;
@@ -237,60 +245,34 @@
     });
   }
 
+
   function buildToggle(on) {
     var host = document.createElement('span');
     host.className = 'sl-mod-switch';
     host.setAttribute('aria-hidden', 'true');
-    setStyles(host, {
-      display: 'inline-block',
-      position: 'relative',
-      flex: '0 0 auto',
-      width: '44px',
-      height: '24px',
-      cursor: 'pointer'
-    });
+    host.setAttribute('aria-checked', String(!!on));
 
     var track = document.createElement('span');
-    setStyles(track, {
-      position: 'absolute',
-      top: '0',
-      right: '0',
-      bottom: '0',
-      left: '0',
-      borderRadius: '999px',
-      transition: 'background 150ms ease'
-    });
+    track.className = 'sl-mod-switch-track';
 
     var knob = document.createElement('span');
-    setStyles(knob, {
-      position: 'absolute',
-      left: '3px',
-      top: '3px',
-      width: '18px',
-      height: '18px',
-      borderRadius: '50%',
-      background: '#fff',
-      boxShadow: '0 1px 3px rgba(0,0,0,.3)',
-      transition: 'transform 150ms ease'
-    });
+    knob.className = 'sl-mod-switch-knob';
 
     track.appendChild(knob);
     host.appendChild(track);
 
     function paint(next) {
-      setStyles(track, {
-        background: next
-          ? 'var(--action-primary-normal, #3565d4)'
-          : 'var(--bg-neutral-strong, #bdbdbd)'
-      });
-      setStyles(knob, {
-        transform: next ? 'translateX(20px)' : 'translateX(0)'
-      });
+      host.setAttribute('aria-checked', String(!!next));
     }
 
     paint(on);
-    return { host: host, paint: paint };
+
+    return {
+      host: host,
+      paint: paint
+    };
   }
+
 
   /* ---------- rows ---------- */
   function buildRow(f, note) {
