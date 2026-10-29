@@ -273,7 +273,7 @@
 
         // Nederlands
         "kut", "lul", "hoer", "fok", "fuk", "shi", "gvd", "kkr",
-        "piemel", "dick", "dik", "dih", "cuck", "cock", "fag",
+        "piemel", "dick", "dik", "dih", "cuck", "cock", "fag","vagina",
 
         // Engels
         "fck", "fk", "fuck", "shit", "bitch", "suck",
