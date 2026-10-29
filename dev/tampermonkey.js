@@ -189,7 +189,7 @@
     }
   }
 
-  /* ---------- DOM helpers ---------- */
+  /* ---------- DOM helper ---------- */
   function el(tag, attrs, children) {
     var n = document.createElement(tag);
     if (attrs) Object.keys(attrs).forEach(function (k) {
@@ -200,30 +200,15 @@
     return n;
   }
 
-  // Copies Angular scoping attributes (_ngcontent-* / _nghost-*) from a native
-  // node to ours, so Somtoday's own scoped toggle styles apply to our switch.
-  function copyScope(src, dst, prefix) {
-    if (!src) return false;
-    var found = false;
-    for (var i = 0; i < src.attributes.length; i++) {
-      var a = src.attributes[i];
-      if (a.name.indexOf(prefix) === 0) {
-        dst.setAttribute(a.name, a.value);
-        found = true;
-      }
-    }
-    return found;
-  }
-
   /* ---------- MOD 2.0 tab ---------- */
   var availableMods = null;   // [{name, sha}] once the folder listing is known
   var modOpen = false;
   var originalTitle = null;
 
   /*
-   * Built-in look, used only when no native Somtoday switch is on the page
-   * (class "sl-mod-bare"). When a native switch exists, its own scoped styles
-   * are used instead and these rules do not apply.
+   * Only the layout and text of our own elements come from this stylesheet.
+   * The switch itself is drawn with inline styles (see buildToggle), so it
+   * does not depend on Somtoday's CSS being loaded.
    */
   var MOD_CSS = [
     '#' + PANEL_ID + ' { padding: 8px 0; font-family: inherit; color: var(--fg-neutral-strong, #222); }',
@@ -232,13 +217,6 @@
     '.sl-mod-row:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)); }',
     '.sl-mod-row:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4); outline-offset: -2px; }',
     '.sl-mod-label { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 20px; color: var(--fg-neutral-strong, #222); overflow-wrap: anywhere; }',
-    '.sl-mod-bare { display: inline-block; position: relative; flex: 0 0 auto; width: 44px; height: 24px; cursor: pointer; }',
-    '.sl-mod-bare .toggle { position: relative; width: 44px; height: 24px; }',
-    '.sl-mod-bare input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; pointer-events: none; }',
-    '.sl-mod-bare .slider { position: absolute; inset: 0; border-radius: 999px; background: var(--bg-neutral-strong, #bdbdbd); transition: background 150ms ease; }',
-    '.sl-mod-bare .slider::before { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform 150ms ease; }',
-    '.sl-mod-bare input:checked + .slider { background: var(--action-primary-normal, #3565d4); }',
-    '.sl-mod-bare input:checked + .slider::before { transform: translateX(20px); }',
     '.sl-mod-note { display: none; padding: 12px 24px 0; font-size: 13px; color: var(--fg-neutral-moderate, #666); }',
     '.sl-mod-note button { margin-left: 12px; cursor: pointer; background: transparent; color: inherit; border: 1px solid rgba(128,128,128,.6); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px; }',
     '.sl-mod-empty { padding: 16px 24px; font-size: 14px; color: var(--fg-neutral-moderate, #666); }'
@@ -252,40 +230,66 @@
     (document.head || document.documentElement).appendChild(s);
   }
 
-  /* ---------- switch ---------- */
+  /* ---------- switch (inline styles, independent of page CSS) ---------- */
+  function setStyles(node, props) {
+    Object.keys(props).forEach(function (k) {
+      node.style.setProperty(k, props[k], 'important');
+    });
+  }
+
   function buildToggle(on) {
-    var nativeHost = document.querySelector('hmy-toggle');
-    var nativeToggle = document.querySelector('hmy-toggle .toggle');
-    var nativeInput = document.querySelector('hmy-toggle input');
-    var nativeSlider = document.querySelector('hmy-toggle .slider');
-
-    var hasNative = Boolean(nativeToggle && nativeSlider);
-
-    var host = document.createElement('hmy-toggle');
-    host.setAttribute('tabindex', '-1');
+    var host = document.createElement('span');
+    host.className = 'sl-mod-switch';
     host.setAttribute('aria-hidden', 'true');
-    if (hasNative) copyScope(nativeHost, host, '_nghost');
-    host.className = hasNative ? 'sl-mod-switch' : 'sl-mod-bare';
+    setStyles(host, {
+      display: 'inline-block',
+      position: 'relative',
+      flex: '0 0 auto',
+      width: '44px',
+      height: '24px',
+      cursor: 'pointer'
+    });
 
-    var wrap = document.createElement('div');
-    wrap.className = 'toggle';
-    copyScope(nativeToggle, wrap, '_ngcontent');
+    var track = document.createElement('span');
+    setStyles(track, {
+      position: 'absolute',
+      top: '0',
+      right: '0',
+      bottom: '0',
+      left: '0',
+      borderRadius: '999px',
+      transition: 'background 150ms ease'
+    });
 
-    var input = document.createElement('input');
-    input.type = 'checkbox';
-    input.tabIndex = -1;
-    input.checked = on;
-    copyScope(nativeInput, input, '_ngcontent');
+    var knob = document.createElement('span');
+    setStyles(knob, {
+      position: 'absolute',
+      left: '3px',
+      top: '3px',
+      width: '18px',
+      height: '18px',
+      borderRadius: '50%',
+      background: '#fff',
+      boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+      transition: 'transform 150ms ease'
+    });
 
-    var slider = document.createElement('div');
-    slider.className = 'slider';
-    copyScope(nativeSlider, slider, '_ngcontent');
+    track.appendChild(knob);
+    host.appendChild(track);
 
-    wrap.appendChild(input);
-    wrap.appendChild(slider);
-    host.appendChild(wrap);
+    function paint(next) {
+      setStyles(track, {
+        background: next
+          ? 'var(--action-primary-normal, #3565d4)'
+          : 'var(--bg-neutral-strong, #bdbdbd)'
+      });
+      setStyles(knob, {
+        transform: next ? 'translateX(20px)' : 'translateX(0)'
+      });
+    }
 
-    return { host: host, input: input };
+    paint(on);
+    return { host: host, paint: paint };
   }
 
   /* ---------- rows ---------- */
@@ -306,15 +310,11 @@
       sw.host
     ]);
 
-    function setVisual(next) {
-      sw.input.checked = next;
-      row.setAttribute('aria-checked', String(next));
-    }
-
     function flip() {
       var next = !isEnabled(f.name);
       setEnabled(f.name, next);
-      setVisual(next);
+      sw.paint(next);
+      row.setAttribute('aria-checked', String(next));
       note.style.display = 'block';
     }
 
