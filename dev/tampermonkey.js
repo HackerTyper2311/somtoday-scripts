@@ -1,3 +1,4 @@
+
 (function () {
   'use strict';
 
@@ -33,7 +34,7 @@
   function getEnabledMap() {
     try {
       var m = JSON.parse(window.localStorage.getItem(MODS_KEY) || '{}');
-      return (m && typeof m === 'object') ? m : {};
+      return m && typeof m === 'object' ? m : {};
     } catch (e) {
       return {};
     }
@@ -45,13 +46,14 @@
 
   function setEnabled(name, on) {
     var m = getEnabledMap();
+
     if (on) m[name] = true;
     else delete m[name];
 
     try {
       window.localStorage.setItem(MODS_KEY, JSON.stringify(m));
     } catch (e) {
-      warn('could not save mod state:', e && e.message);
+      warn('Could not save mod state:', e && e.message);
     }
   }
 
@@ -79,7 +81,7 @@
   if (typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand('Somtoday Loader: clear cache', function () {
       GM_deleteValue(CACHE_KEY);
-      log('cache cleared, reload the page');
+      log('Cache cleared. Reload the page.');
     });
   }
 
@@ -132,6 +134,7 @@
       }
 
       var items = JSON.parse(r.text);
+
       if (!Array.isArray(items)) {
         throw new Error('Unexpected API response');
       }
@@ -153,11 +156,12 @@
       return cache.listing;
     }).catch(function (err) {
       if (cache.listing) {
-        warn('could not check for updates, using cached scripts:', err.message);
+        warn('Could not check for updates; using cached scripts:', err.message);
+
         toast(
-          'Somtoday Loader: could not check for updates (' +
+          'Somtoday Loader: update check failed (' +
           err.message +
-          '), using cached scripts'
+          '). Using cached scripts.'
         );
 
         return cache.listing;
@@ -194,8 +198,8 @@
 
       return r.text;
     }).catch(function (err) {
-      if (hit) {
-        warn('could not refresh ' + file.name + ', using cached copy:', err.message);
+      if (hit && typeof hit.code === 'string') {
+        warn('Could not refresh ' + file.name + '; using cached copy:', err.message);
         return hit.code;
       }
 
@@ -244,7 +248,7 @@
         if (s1 && s1.remove) s1.remove();
 
         if (ran()) {
-          log('ran ' + name + ' (GM_addElement)');
+          log('Ran ' + name + ' (GM_addElement)');
           return;
         }
       } catch (e) {
@@ -260,19 +264,19 @@
       el.remove();
 
       if (ran()) {
-        log('ran ' + name + ' (inline script)');
+        log('Ran ' + name + ' (inline script)');
         return;
       }
     } catch (e) {
-      warn('inline script failed for ' + name + ':', e && e.message);
+      warn('Inline script failed for ' + name + ':', e && e.message);
     }
 
     try {
       (new Function(code + tail))();
-      log('ran ' + name + ' (sandbox)');
+      log('Ran ' + name + ' (sandbox)');
     } catch (e) {
       console.error('[Somtoday Loader] ' + name + ' could not run:', e);
-      toast('Somtoday Loader: ' + name + ' was blocked or crashed, see the console');
+      toast('Somtoday Loader: ' + name + ' was blocked or crashed. See console.');
     }
   }
 
@@ -301,30 +305,57 @@
 
   var MOD_CSS = [
     '#' + PANEL_ID + ' { padding: 8px 0; font-family: inherit; color: var(--fg-neutral-strong, #222); }',
+
     '.sl-mod-intro { padding: 8px 24px 12px; font-size: 13px; line-height: 18px; color: var(--fg-neutral-moderate, #666); }',
-    '.sl-mod-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; min-height: 56px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid var(--border-neutral-weak, #e5e5e5); }',
+
+    '.sl-mod-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; min-height: 56px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid var(--border-neutral-weak, #e5e5e5); transition: background .2s ease; }',
+
     '.sl-mod-row:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)); }',
-    '.sl-mod-row:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4); outline-offset: -2px; }',
+
+    '.sl-mod-row:focus-visible { outline: 2px solid #60a5fa; outline-offset: -2px; }',
+
     '.sl-mod-label { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 20px; color: var(--fg-neutral-strong, #222); overflow-wrap: anywhere; }',
+
+    /* Slider container */
     '.sl-mod-switch { display: inline-block; position: relative; flex: 0 0 auto; width: 44px; height: 24px; cursor: pointer; -webkit-tap-highlight-color: transparent; }',
-    '.sl-mod-switch-track { position: absolute; inset: 0; box-sizing: border-box; background: var(--bg-neutral-none, transparent); border: 2px solid var(--border-neutral-normal, #999); border-radius: 50px; transition: background-color .2s ease, border-color .2s ease; }',
-    '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-track { background: var(--bg-primary-normal, var(--action-primary-normal, #3565d4)); border-color: var(--border-primary-strong, var(--action-primary-normal, #3565d4)); }',
-    '.sl-mod-row:hover .sl-mod-switch-track { border-color: var(--border-primary-strong, var(--action-primary-normal, #3565d4)); }',
-    '.sl-mod-switch-knob { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--border-neutral-normal, #999); box-shadow: 0 1px 2px rgba(0,0,0,.16); transition: transform .2s ease, background-color .2s ease; }',
-    '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-knob { transform: translateX(20px); background: #fff; }',
+
+    /* Smooth dark track */
+    '.sl-mod-switch-track { position: absolute; inset: 0; box-sizing: border-box; background: #343a46; border: 1px solid #687386; border-radius: 50px; transition: background .25s ease, border-color .25s ease, box-shadow .25s ease; }',
+
+    /* Smooth blue gradient when enabled */
+    '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-track { background: linear-gradient(135deg, #60a5fa, #2563eb); border-color: #60a5fa; box-shadow: 0 0 10px rgba(37,99,235,.25); }',
+
+    /* Hover */
+    '.sl-mod-row:hover .sl-mod-switch-track { border-color: #60a5fa; }',
+
+    /* Knob */
+    '.sl-mod-switch-knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #aab4c3; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .25s cubic-bezier(.2,.8,.2,1), background-color .25s ease, box-shadow .25s ease; }',
+
+    /* Knob slides right when enabled */
+    '.sl-mod-switch[aria-checked="true"] .sl-mod-switch-knob { transform: translateX(20px); background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2); }',
+
+    /* Reduced motion accessibility */
+    '@media (prefers-reduced-motion: reduce) { .sl-mod-switch-track, .sl-mod-switch-knob, .sl-mod-row { transition: none !important; } }',
+
     '.sl-mod-note { display: none; padding: 12px 24px 0; font-size: 13px; color: var(--fg-neutral-moderate, #666); }',
-    '.sl-mod-note button { margin-left: 12px; cursor: pointer; background: transparent; color: inherit; border: 1px solid rgba(128,128,128,.6); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px; }',
+
+    '.sl-mod-note button { margin-left: 12px; cursor: pointer; background: transparent; color: inherit; border: 1px solid rgba(128,128,128,.6); border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; transition: background .2s ease, border-color .2s ease; }',
+
+    '.sl-mod-note button:hover { border-color: #60a5fa; background: rgba(59,130,246,.08); }',
+
     '.sl-mod-empty { padding: 16px 24px; font-size: 14px; color: var(--fg-neutral-moderate, #666); }'
   ].join('\n');
 
   function injectModStyles() {
-    if (document.getElementById('somtoday-mod-style')) return;
+    var s = document.getElementById('somtoday-mod-style');
 
-    var s = document.createElement('style');
-    s.id = 'somtoday-mod-style';
+    if (!s) {
+      s = document.createElement('style');
+      s.id = 'somtoday-mod-style';
+      (document.head || document.documentElement).appendChild(s);
+    }
+
     s.textContent = MOD_CSS;
-
-    (document.head || document.documentElement).appendChild(s);
   }
 
   /* ---------- switch ---------- */
@@ -448,6 +479,7 @@
     panel.appendChild(note);
   }
 
+  /* ---------- Somtoday tab helpers ---------- */
   const $ = (sel, root = document) => root.querySelector(sel);
   const getNav = () => $('sl-account-modal nav');
   const getDetails = () => $('sl-account-modal-details');
@@ -486,7 +518,6 @@
     if (!content || !details || !nav) return;
 
     injectModStyles();
-
     modOpen = true;
 
     const modTab = getModTab();
@@ -531,16 +562,17 @@
     originalTitle = null;
   }
 
-  // Capture phase, never stops events, so Angular's tabs keep working.
-  document.addEventListener('click', (e) => {
-    const tab = e.target.closest?.(TAB);
+  // Capture phase without stopping events, so Angular tabs can still work.
+  document.addEventListener('click', function (e) {
+    const target = e.target;
+    const tab = target && target.closest ? target.closest(TAB) : null;
     if (!tab) return;
 
     if (tab.hasAttribute(MARK)) openMod();
     else closeMod(tab.querySelector('span')?.textContent.trim());
   }, true);
 
-  document.addEventListener('keydown', (e) => {
+  document.addEventListener('keydown', function (e) {
     if ((e.key === 'Enter' || e.key === ' ') &&
         e.target.matches?.(`${TAB}[${MARK}]`)) {
       e.preventDefault();
@@ -554,7 +586,7 @@
     if (scheduled) return;
     scheduled = true;
 
-    requestAnimationFrame(() => {
+    requestAnimationFrame(function () {
       scheduled = false;
       injectTab();
 
@@ -577,11 +609,11 @@
     renderPanel();
 
     if (!files.length) {
-      warn('no .js files found in ' + FOLDER + '/');
+      warn('No .js files found in ' + FOLDER + '/');
       return;
     }
 
-    // Forget cached code of deleted files.
+    // Remove cached code for files that no longer exist.
     var names = {};
 
     files.forEach(function (f) {
@@ -592,12 +624,14 @@
       if (!names[n]) delete cache.files[n];
     });
 
+    saveCache(cache);
+
     var enabled = files.filter(function (f) {
       return isEnabled(f.name);
     });
 
     if (!enabled.length) {
-      log('no mods enabled');
+      log('No mods enabled');
       return;
     }
 
@@ -607,7 +641,7 @@
           return { name: f.name, code: code };
         },
         function (err) {
-          warn('skipping ' + f.name + ':', err.message);
+          warn('Skipping ' + f.name + ':', err.message);
           return null;
         }
       );
@@ -623,7 +657,7 @@
       });
 
       log(
-        'done, ' + loaded.filter(Boolean).length +
+        'Done, ' + loaded.filter(Boolean).length +
         ' of ' + files.length + ' mod(s) loaded'
       );
     });
@@ -631,6 +665,6 @@
     availableMods = availableMods || [];
     renderPanel();
 
-    console.error('[Somtoday Loader] could not load scripts:', err);
+    console.error('[Somtoday Loader] Could not load scripts:', err);
   });
 })();
