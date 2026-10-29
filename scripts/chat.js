@@ -31,8 +31,8 @@
 
         channelPrefix: "school",
 
-        maxMessages: 100,
-        localCacheMessages: 100,
+        maxMessages: 1000,
+        localCacheMessages: 1000,
 
         startupTimeout: 30000,
         syncOnOpen: true,
