@@ -4,21 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.6.0
-     * ============================================================
-     *
-     * - Somtoday-style Chat tab
-     * - Chat opent niet automatisch
-     * - Native Somtoday-tabs sluiten Chat
-     * - PubNub realtime messaging + History
-     * - LocalStorage cache (versioned, oude data wordt gewist)
-     * - Laag 1: lokaal filter (Unicode-normalisatie, lookalikes)
-     * - Laag 1b: lengte, links, onleesbare tekens, spam (lokaal)
-     * - Duplicaatcontrole: 2 minuten, bij verzenden en ontvangen
-     * - Laag 2: profanity.dev (extern, altijd actief)
-     *
-     * PubNub Message Persistence moet aan staan voor
-     * cross-device history.
+     * Versie: 2.8.0
      * ============================================================
      */
 
@@ -35,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.6.0",
+        version: "2.8.0",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -51,7 +37,7 @@
         startupTimeout: 30000,
         syncOnOpen: true,
 
-        debug: true,
+        debug: false,
 
         // Duplicaatcontrole
         duplicateWindowMs: 2 * 60 * 1000,
@@ -62,17 +48,19 @@
         profanityExternal: true,     // laag 2: profanity.dev
         profanityApi: "https://vector.profanity.dev",
         profanityTimeout: 3000,
-        profanityFailClosed: false,  // true = blokkeren als externe check faalt
+        profanityFailClosed: true,  // true = blokkeren als externe check faalt
 
         // Spamfilter
         spamWindowMs: 10000,
-        spamMaxPerWindow: 6,
-        spamMaxSame: 3,
+        spamMaxPerWindow: 10,
+        spamMaxSame: 5,
+        spamMinuteWindowMs: 60 * 1000,
+        spamMaxPerMinute: 25,
 
         // Extra filters
         maxMessageLength: 300,       // langere berichten worden verborgen
         blockLinks: true,            // links worden verborgen
-        blockForeignScripts: true    // berichten met vooral niet-Latijnse letters
+        blockForeignScripts: true    // berichten met niet-Latijnse letters
     };
 
     const STORAGE_PREFIX = "somtoday-school-chat";
@@ -286,6 +274,9 @@
         // Engels
         "fck", "fk", "fuck", "shit", "bitch", "suck",
 
+        // Seksueel getinte termen
+        "goon", "gooner", "gooning", "sperma", "sperm",
+
         // Racistische termen en fragmenten
         "neger", "nigga", "niga", "nigger", "nagger",
         "nija", "ninja", "ngger", "ngr", "negr"
@@ -338,16 +329,16 @@
     // ============================================================
 
     const LINK_PATTERN =
-        /(https?:\/\/|www\.|[a-z0-9-]+\.(com|nl|net|org|io|xyz|gg|tv|me|be|co|app|site|ly)\b)/i;
+        /(https?:\/\/|www\.|[a-z0-9-]+\s*\.\s*(com|nl|net|org|io|xyz|gg|tv|me|be|co|app|site|ly)\b)/i;
 
     function containsLink(text) {
         return CONFIG.blockLinks && LINK_PATTERN.test(clean(text));
     }
 
     /*
-     * True als de tekst vooral uit niet-Latijnse letters bestaat,
-     * bijvoorbeeld katakana of Cyrillisch. NFKC eerst, zodat
-     * vette en fullwidth-letters als Latijns tellen.
+     * True als de tekst een letter bevat die niet in het Latijnse schrift staat.
+     * Na NFKC zijn vette, fullwidth en superscript-letters al omgezet waar dat kan.
+     * Eén niet-Latijnse letter is genoeg; dat vangt ook mengvormen.
      */
     function isMostlyForeign(text) {
 
@@ -355,21 +346,15 @@
             return false;
         }
 
-        const letters = Array.from(clean(text).normalize("NFKC"))
-            .filter(ch => /\p{L}/u.test(ch));
-
-        if (letters.length < 3) {
-            return false;
-        }
-
-        const foreign = letters.filter(ch => !/[A-Za-z\u00C0-\u024F]/.test(ch));
-
-        return foreign.length / letters.length > 0.3;
+        return Array.from(clean(text).normalize("NFKC")).some(
+            ch => /\p{L}/u.test(ch) && !/\p{Script=Latin}/u.test(ch)
+        );
     }
 
     /*
      * Geeft de melding terug als een bericht verborgen moet worden,
-     * anders null.
+     * anders null. Scheldwoorden gaan voor de tekencheck, zodat
+     * mengvormen als "ᶠᶸᶜᵏᵧₒᵤ" de juiste melding krijgen.
      */
     function moderationNotice(text) {
 
@@ -379,16 +364,16 @@
             return HIDDEN_LONG_TEXT;
         }
 
+        if (CONFIG.profanityLocal && containsProfanityLocal(raw)) {
+            return HIDDEN_TEXT;
+        }
+
         if (containsLink(raw)) {
             return HIDDEN_LINK_TEXT;
         }
 
         if (isMostlyForeign(raw)) {
             return HIDDEN_CHARS_TEXT;
-        }
-
-        if (CONFIG.profanityLocal && containsProfanityLocal(raw)) {
-            return HIDDEN_TEXT;
         }
 
         return null;
@@ -415,19 +400,27 @@
 
         const lower = text.toLowerCase();
 
+        // Historie van de laatste minuut; de kortere vensters zitten daarin.
         const history = (recentByUser.get(userId) || [])
-            .filter(entry => Math.abs(now - entry.time) < CONFIG.spamWindowMs);
+            .filter(entry => Math.abs(now - entry.time) < CONFIG.spamMinuteWindowMs);
 
         history.push({ text: lower, time: now });
         recentByUser.set(userId, history);
 
-        if (history.length > CONFIG.spamMaxPerWindow) {
+        const short = history.filter(
+            entry => Math.abs(now - entry.time) < CONFIG.spamWindowMs
+        );
+
+        if (short.length > CONFIG.spamMaxPerWindow) {
             return true;
         }
 
-        const same = history.filter(entry => entry.text === lower).length;
+        if (short.filter(entry => entry.text === lower).length >= CONFIG.spamMaxSame) {
+            return true;
+        }
 
-        return same >= CONFIG.spamMaxSame;
+        // Vangt losse letters of woorden die één voor één binnenkomen.
+        return history.length > CONFIG.spamMaxPerMinute;
     }
 
     // ============================================================
@@ -1349,7 +1342,7 @@
         }
 
         /*
-         * Lokale controles: lengte, links, tekens, scheldwoorden.
+         * Lokale controles: lengte, scheldwoorden, links, tekens.
          */
 
         const sendNotice = moderationNotice(text);
