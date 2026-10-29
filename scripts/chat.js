@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.10.0
+     * Versie: 2.10.1
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.10.0",
+        version: "2.10.1",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -74,6 +74,7 @@
     const HIDDEN_LONG_TEXT = "⚠️ Bericht verborgen (te lang)";
     const HIDDEN_LINK_TEXT = "⚠️ Bericht verborgen (link)";
     const HIDDEN_CHARS_TEXT = "⚠️ Bericht verborgen (onleesbare tekens)";
+    const HIDDEN_ART_TEXT = "⚠️ Bericht verborgen (tekening of meerdere regels)";
 
     // ============================================================
     // STATE
@@ -208,10 +209,11 @@
     // 1. NFKD haalt stijlletters terug naar gewone letters (𝒹 -> d, ℊ -> g,
     //    fullwidth, ligaturen, cirkel- en vetletters).
     // 2. Accenten en onzichtbare tekens worden verwijderd.
-    // 3. Leetspeak-cijfers en symbolen worden letters.
-    // 4. Alles wat geen a-z is en niet als scheiding of emoji telt, maakt het
-    //    bericht "onleesbaar". Zo kan niets worden verstopt in tekens die de
-    //    filter niet kent.
+    // 3. Regionale-indicatorletters (🇫🇦) worden letters.
+    // 4. Leetspeak-cijfers en symbolen worden letters.
+    // 5. Tekeningen en ASCII-art worden in zijn geheel verborgen.
+    // 6. Alles wat geen a-z is en niet als scheiding of emoji telt, maakt het
+    //    bericht "onleesbaar".
     // ============================================================
 
     function squashRepeats(text) {
@@ -238,7 +240,32 @@
 
     // Veilige niet-letter tekens: typografische leestekens, valuta, emoji
     const SAFE_SYMBOLS =
-        /[\u2018\u2019\u201C\u201D\u2013\u2014\u2026\u20AC]|[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Regional_Indicator}]/u;
+        /[\u2018\u2019\u201C\u201D\u2013\u2014\u2026\u20AC]|[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u;
+
+    /*
+     * Herkent tekeningen en ASCII-art: meerdere regels, of veel
+     * leestekens/symbolen ten opzichte van de letters.
+     */
+    function isArtLike(text) {
+
+        const raw = String(text ?? "");
+
+        if (/[\r\n]/.test(raw)) {
+            return true;
+        }
+
+        const chars = Array.from(raw).filter(c => !/\s/.test(c));
+
+        if (chars.length < 8) {
+            return false;
+        }
+
+        const symbols = chars.filter(c =>
+            /[_|\/\\()\[\]{}<>'`~^=*+#,;:]/.test(c)
+        ).length;
+
+        return symbols / chars.length > 0.25;
+    }
 
     /*
      * Zet tekst om naar woorden van a-z.
@@ -259,8 +286,13 @@
 
         for (const ch of base) {
 
+            const cp = ch.codePointAt(0);
+
             if (ch >= "a" && ch <= "z") {
                 folded += ch;
+            } else if (cp >= 0x1F1E6 && cp <= 0x1F1FF) {
+                // Regionale-indicatorletters (🇫🇦🇬🇬🇴🇹) spellen gewone letters
+                folded += String.fromCharCode(97 + cp - 0x1F1E6);
             } else if (LEET[ch] !== undefined) {
                 folded += LEET[ch];
             } else if (LETTERLIKE[ch] !== undefined) {
@@ -422,11 +454,11 @@
 
     /*
      * Geeft de melding terug als het bericht lokaal verborgen moet worden,
-     * anders null. Volgorde: lengte, scheldwoorden, links, onleesbare tekens.
+     * anders null. Volgorde: lengte, tekening, scheldwoorden, links, tekens.
      */
     function lexicalNotice(text) {
 
-        const raw = clean(text);
+        const raw = String(text ?? "").trim();
 
         if (!raw) {
             return null;
@@ -434,6 +466,10 @@
 
         if (raw.length > CONFIG.maxMessageLength) {
             return HIDDEN_LONG_TEXT;
+        }
+
+        if (isArtLike(raw)) {
+            return HIDDEN_ART_TEXT;
         }
 
         const { tokens, unknown } = analyzeText(raw);
@@ -1389,7 +1425,7 @@
             return;
         }
 
-        // Lokale controles: lengte, scheldwoorden, links, onleesbare tekens
+        // Lokale controles: lengte, tekeningen, scheldwoorden, links, tekens
         const notice = lexicalNotice(text);
 
         if (notice) {
