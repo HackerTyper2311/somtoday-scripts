@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.9.2
+     * Versie: 2.9.3
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.9.2",
+        version: "2.9.3",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -261,13 +261,13 @@
 
         // Nederlands
         "kut", "lul", "hoer", "fok", "fuk", "shi", "gvd", "kkr",
-        "piemel", "dick", "dik", "dih", "cuck", "cock", "fag", "vagina",
+        "piemel", "pimel", "dick", "dik", "dih", "cuck", "cock", "fag", "vagina",
 
         // Engels
         "fck", "fk", "fuck", "shit", "bitch", "suck",
 
         // Seksueel getinte termen
-        "goon", "gooner", "gooning", "sperma", "sperm",
+        "goon", "gooner", "gooning", "gogoon", "gogooning", "sperma", "sperm",
 
         // Racistische termen
         "neger", "nigga", "niga", "nigger", "nagger", "ngger", "ngr", "negr"
@@ -280,7 +280,7 @@
         // Nederlands
         "klootzak", "kanker", "godverdomme", "godver",
         "scheiss", "scheisse", "schiesse", "sheisse",
-        "schijt", "flikker", "mongool", "balzak", "piemel", "neger",
+        "schijt", "flikker", "mongool", "balzak", "piemel", "pimel", "neger",
 
         // Engels
         "fuck", "bastard", "faggot", "fagot", "cocksuck",
@@ -338,11 +338,51 @@
     // EXTRA FILTERS (LOKAAL)
     // ============================================================
 
+    // Domeinen met een punt, bijv. "youtube.com" of "https://..."
     const LINK_PATTERN =
         /(https?:\/\/|www\.|[a-z0-9-]+\s*\.\s*(com|nl|net|org|io|xyz|gg|tv|me|be|co|app|site|ly)\b)/i;
 
+    // Platformnamen die als link worden gebruikt, ook zonder punt
+    const PLATFORMS = new Set([
+        "youtube", "youtu", "discord", "twitch", "instagram", "tiktok",
+        "snapchat", "telegram", "whatsapp", "facebook", "reddit",
+        "twitter", "onlyfans"
+    ]);
+
+    // Topleveldomeinen en losse "com"/"gg"-achtige woorden
+    const TLDS = new Set([
+        "com", "nl", "net", "org", "io", "xyz", "gg", "tv", "me",
+        "be", "co", "app", "site", "ly"
+    ]);
+
+    /*
+     * True als de tekst een link is of lijkt op een link:
+     * - een domein met punt ("youtube.com")
+     * - een platformnaam met een tld, slash of @ ("youtube com", "youtube / @naam")
+     */
     function containsLink(text) {
-        return CONFIG.blockLinks && LINK_PATTERN.test(clean(text));
+
+        if (!CONFIG.blockLinks) {
+            return false;
+        }
+
+        const raw = clean(text);
+
+        if (LINK_PATTERN.test(raw)) {
+            return true;
+        }
+
+        const { tokens } = analyzeText(raw);
+        const hasPlatform = tokens.some(t => PLATFORMS.has(t));
+
+        if (!hasPlatform) {
+            return false;
+        }
+
+        const hasTld = tokens.some(t => TLDS.has(t));
+        const hasLinkSymbol = /[\/@.]/.test(raw);
+
+        return hasTld || hasLinkSymbol;
     }
 
     /*
