@@ -212,6 +212,36 @@
   var originalTitle = null;
   var reloadNote = null;
 
+  var MOD_CSS = [
+    '#' + PANEL_ID + ' { padding: 8px 0; font-family: inherit; color: var(--fg-neutral-strong, #222); }',
+    '.mod-intro { font-size: 13px; line-height: 18px; color: var(--fg-neutral-moderate, #666); padding: 4px 16px 12px; }',
+    '.settings { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--border-neutral-weak, #e5e5e5); cursor: pointer; }',
+    '.settings:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)); }',
+    '.settings-span { flex: 1; min-width: 0; font-size: 15px; line-height: 20px; color: var(--fg-neutral-strong, #222); }',
+    '.settings-sub { display: block; font-size: 12px; line-height: 16px; color: var(--fg-neutral-moderate, #666); margin-top: 2px; }',
+    '.setting-preview { flex: 0 0 auto; min-width: 36px; height: 28px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; background: var(--bg-neutral-weak, #eee); color: var(--fg-neutral-moderate, #555); }',
+    '.setting-preview.on { background: var(--bg-positive-weakest, #e6f4ea); color: var(--fg-on-positive-weakest, #1e7a3a); }',
+    'hmy-toggle { display: inline-block; flex: 0 0 auto; }',
+    '.toggle { position: relative; width: 44px; height: 24px; }',
+    '.toggle input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; pointer-events: none; }',
+    '.slider { position: absolute; inset: 0; border-radius: 999px; background: var(--bg-neutral-strong, #bdbdbd); transition: background 150ms ease; }',
+    '.slider::before { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform 150ms ease; }',
+    '.toggle input:checked + .slider { background: var(--action-primary-normal, #3565d4); }',
+    '.toggle input:checked + .slider::before { transform: translateX(20px); }',
+    '.toggle-focus:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4); outline-offset: 2px; border-radius: 999px; }',
+    '.mod-note { display: none; margin: 12px 16px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; background: var(--bg-neutral-weakest, #f5f5f5); color: var(--fg-neutral-strong, #222); }',
+    '.mod-note button { margin-left: 8px; padding: 4px 12px; border-radius: 6px; cursor: pointer; border: 1px solid currentColor; background: transparent; color: inherit; font: inherit; }',
+    '.mod-empty { padding: 16px; font-size: 14px; color: var(--fg-neutral-moderate, #666); }'
+  ].join('\n');
+
+  function injectModStyles() {
+    if (document.getElementById('somtoday-mod-style')) return;
+    var s = document.createElement('style');
+    s.id = 'somtoday-mod-style';
+    s.textContent = MOD_CSS;
+    (document.head || document.documentElement).appendChild(s);
+  }
+
   const $ = (sel, root = document) => root.querySelector(sel);
   const getNav = () => $('sl-account-modal nav');
   const getDetails = () => $('sl-account-modal-details');
@@ -243,48 +273,74 @@
 
   function renderPanel() {
     if (!modOpen) return;
-    const panel = document.getElementById(PANEL_ID);
+    var panel = document.getElementById(PANEL_ID);
     if (!panel) return;
 
     panel.textContent = '';
-    panel.appendChild(el('div', { style: 'font-weight:600;margin-bottom:4px', text: 'Mods' }));
+
     panel.appendChild(el('div', {
-      style: 'opacity:.7;font-size:12px;margin-bottom:12px',
-      text: 'Off by default. Changes take effect after a reload.'
+      class: 'mod-intro',
+      text: 'Mods staan standaard uit. Wijzigingen werken na het opnieuw laden van de pagina.'
     }));
 
     if (availableMods === null) {
-      panel.appendChild(el('div', { text: 'Loading mods…' }));
+      panel.appendChild(el('div', { class: 'mod-empty', text: 'Mods laden…' }));
       return;
     }
     if (!availableMods.length) {
-      panel.appendChild(el('div', { text: 'No mods found in scripts/.' }));
+      panel.appendChild(el('div', { class: 'mod-empty', text: 'Geen mods gevonden in scripts/.' }));
       return;
     }
 
-    const reloadBtn = el('button', {
-      type: 'button',
-      text: 'Reload now',
-      style: 'padding:6px 12px;cursor:pointer;border-radius:6px;border:1px solid currentColor;background:transparent;color:inherit'
-    });
-    reloadBtn.addEventListener('click', () => location.reload());
+    var reloadBtn = el('button', { type: 'button', text: 'Nu opnieuw laden' });
+    reloadBtn.addEventListener('click', function () { location.reload(); });
 
-    const note = el('div', { style: 'display:none;margin-top:12px' }, [
-      el('span', { text: 'Reload to apply changes. ' }),
+    var note = el('div', { class: 'mod-note' }, [
+      el('span', { text: 'Herlaad de pagina om de wijziging toe te passen.' }),
       reloadBtn
     ]);
     reloadNote = note;
 
-    availableMods.forEach(f => {
-      const box = el('input', { type: 'checkbox' });
-      box.checked = isEnabled(f.name);
-      box.addEventListener('change', () => {
-        setEnabled(f.name, box.checked);
+    availableMods.forEach(function (f) {
+      var on = isEnabled(f.name);
+
+      var input = el('input', { type: 'checkbox' });
+      input.checked = on;
+
+      var slider = el('div', { class: 'slider' });
+      var toggleInner = el('div', { class: 'toggle' }, [input, slider]);
+
+      var toggle = el('hmy-toggle', {
+        class: 'toggle-focus',
+        tabindex: '0',
+        role: 'checkbox',
+        'aria-label': modLabel(f.name),
+        'aria-checked': String(on)
+      }, [toggleInner]);
+
+      var label = el('span', { class: 'settings-span', text: modLabel(f.name) });
+      var preview = el('span', { class: 'setting-preview' + (on ? ' on' : ''), text: on ? 'Aan' : 'Uit' });
+
+      var row = el('div', { class: 'settings' }, [label, preview, toggle]);
+
+      function flip(next) {
+        input.checked = next;
+        toggle.setAttribute('aria-checked', String(next));
+        preview.textContent = next ? 'Aan' : 'Uit';
+        preview.classList.toggle('on', next);
+        setEnabled(f.name, next);
         note.style.display = '';
+      }
+
+      row.addEventListener('click', function () { flip(!input.checked); });
+      toggle.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          flip(!input.checked);
+        }
       });
-      panel.appendChild(el('label', {
-        style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 0;cursor:pointer;border-bottom:1px solid rgba(128,128,128,.25)'
-      }, [el('span', { text: modLabel(f.name) }), box]));
+
+      panel.appendChild(row);
     });
 
     panel.appendChild(note);
@@ -295,6 +351,8 @@
     const details = getDetails();
     const nav = getNav();
     if (!content || !details || !nav) return;
+
+    injectModStyles();
 
     modOpen = true;
     const modTab = getModTab();
@@ -310,7 +368,7 @@
 
     let panel = document.getElementById(PANEL_ID);
     if (!panel) {
-      panel = el('div', { id: PANEL_ID, style: 'padding:16px;color:inherit;font-family:inherit;' });
+      panel = el('div', { id: PANEL_ID });
       content.after(panel);
     }
     panel.style.display = '';
