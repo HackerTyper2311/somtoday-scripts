@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.9.1
+     * Versie: 2.9.2
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.9.1",
+        version: "2.9.2",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -63,7 +63,7 @@
         // Extra filters
         maxMessageLength: 300,       // langere berichten worden verborgen
         blockLinks: true,            // links worden verborgen
-        blockForeignScripts: true    // berichten met niet-Latijnse letters
+        blockForeignScripts: true    // berichten met onleesbare tekens worden verborgen
     };
 
     const STORAGE_PREFIX = "somtoday-school-chat";
@@ -152,6 +152,11 @@
         return list.sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
     }
 
+    function isOwnMessage(message) {
+        return Boolean(currentUser) &&
+            String(message.userId) === String(currentUser.id);
+    }
+
     // ============================================================
     // VERSIE: OUDE DATA WISSEN
     // ============================================================
@@ -202,75 +207,56 @@
         return text.replace(/(.)\1+/g, "$1");
     }
 
-    /*
-     * Lookalike-tekens die naar a-z worden omgezet. Sleutels: kleine letters.
-     * Alles wat na folding geen a-z is, telt als scheidingsteken.
-     */
-    const CONFUSABLES = {
-        // Cyrillisch
-        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
-        "і": "i", "ј": "j", "ѕ": "s", "к": "k", "н": "h", "т": "t", "м": "m",
-        "в": "b", "ԁ": "d", "ԛ": "q", "ԝ": "w", "п": "n", "ц": "u", "ҽ": "e",
-        "һ": "h", "ӏ": "l", "ѵ": "v", "ү": "y", "ѡ": "w",
-        // Grieks
-        "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
-        "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "γ": "y", "η": "n", "μ": "u",
-        "λ": "a", "σ": "e", "δ": "d", "π": "n", "ω": "w",
-        // Latijnse varianten en IPA
-        "ą": "a", "ƒ": "f", "ɑ": "a", "ı": "i", "ɩ": "i", "ƭ": "t", "ɱ": "m",
-        "ø": "o", "ɏ": "y", "ʉ": "u", "ł": "l", "ⱨ": "h", "ʂ": "s", "ҟ": "k",
-        "ç": "c", "ɡ": "g", "ɾ": "r", "ʋ": "v", "ʍ": "w", "ɣ": "y", "ǝ": "e",
-        "ß": "ss", "æ": "ae", "œ": "oe", "ð": "d", "þ": "th",
-        // Valutasymbolen
-        "฿": "b", "₮": "t", "₵": "c", "₴": "s", "₭": "k", "₥": "m", "₣": "f", "₳": "a",
-        // Canadees Syllabisch
-        "ᗩ": "a", "ᗷ": "b", "ᑕ": "c", "ᗪ": "d", "ᗴ": "e", "ᖴ": "f", "ᘜ": "g",
-        "ᕼ": "h", "ᐁ": "i", "ᒍ": "j", "ᖽ": "k", "ᒪ": "l", "ᗰ": "m", "ᑎ": "n",
-        "ᗝ": "o", "ᑭ": "p", "ᑫ": "q", "ᖇ": "r", "ᔕ": "s", "ᖶ": "t", "ᑌ": "u",
-        "ᐯ": "v", "ᗯ": "w", "᙭": "x", "ᖻ": "y", "ᘔ": "z"
-    };
-
-    // Leetspeak-cijfers en symbolen
+    // Leetspeak: symbolen en cijfers die als letter worden gebruikt
     const LEET = {
         "@": "a", "4": "a", "3": "e", "1": "i", "!": "i", "|": "i",
         "0": "o", "5": "s", "$": "s", "7": "t", "8": "b", "9": "g"
     };
 
+    // Niet-ASCII tekens die toegestaan zijn en als scheiding tellen
+    const SEPARATOR_CHARS = /[\u2018\u2019\u201C\u201D\u2013\u2014\u2026\u20AC]/u;
+    const EMOJI_CHARS = /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u;
+
     /*
-     * Zet tekst om naar een lijst woorden van kleine letters a-z.
-     * Onzichtbare tekens en accenten worden verwijderd, lookalikes en
-     * leetspeak worden omgezet, en al het overige telt als scheiding.
+     * Zet tekst om naar woorden van a-z.
+     * unknown = true als de tekst een teken bevat dat niet te lezen is
+     * (bijv. ƀ, ŧ, ₴, ß, Cyrillisch). Zulke berichten worden verborgen.
      */
-    function foldText(text) {
+    function analyzeText(text) {
 
         const base = clean(text)
-            .normalize("NFKD")                      // ligaturen, volle breedte, stijlletters
-            .replace(/\p{M}/gu, "")                 // accenten en combinerende tekens
-            .replace(/\p{Cf}/gu, "")                // onzichtbare tekens (zero-width, variation selectors, tags)
-            .toLowerCase();
+            .normalize("NFKD")
+            .toLowerCase()
+            .normalize("NFKD")
+            .replace(/\p{M}/gu, "")     // accenten en combinerende tekens
+            .replace(/\p{Cf}/gu, "");   // onzichtbare tekens
 
-        let out = "";
+        let folded = "";
+        let unknown = false;
 
         for (const ch of base) {
 
-            if (CONFUSABLES[ch] !== undefined) {
-                out += CONFUSABLES[ch];
+            if (ch >= "a" && ch <= "z") {
+                folded += ch;
             } else if (LEET[ch] !== undefined) {
-                out += LEET[ch];
-            } else if (ch >= "a" && ch <= "z") {
-                out += ch;
+                folded += LEET[ch];
+            } else if (ch <= "\x7f") {
+                folded += " ";                  // cijfers, leestekens, spaties
+            } else if (SEPARATOR_CHARS.test(ch) || EMOJI_CHARS.test(ch)) {
+                folded += " ";
             } else {
-                out += " ";
+                unknown = true;
+                folded += " ";
             }
         }
 
-        return out.split(" ").filter(Boolean);
+        return {
+            tokens: folded.split(" ").filter(Boolean),
+            unknown
+        };
     }
 
-    /*
-     * Exacte woorden. Korte woorden staan hier, niet in de substring-lijst,
-     * zodat "hoera" en "kutje" niet worden geblokkeerd.
-     */
+    // Exacte woorden (korte woorden horen hier, niet in de substring-lijst)
     const PROFANITY_EXACT = new Set([
 
         // Nederlands
@@ -288,9 +274,7 @@
 
     ].map(squashRepeats));
 
-    /*
-     * Substring-matches. Alleen lange, herkenbare termen.
-     */
+    // Substring-matches: alleen lange, herkenbare termen
     const PROFANITY_CONTAINS = [
 
         // Nederlands
@@ -306,9 +290,11 @@
 
     ].map(squashRepeats);
 
-    function containsProfanityLocal(text) {
-
-        const tokens = foldText(text);
+    /*
+     * Controleert een lijst woorden op scheldwoorden, ook als ze zijn
+     * opgeknipt ("k u t") of aan elkaar zijn geplakt ("kuttt").
+     */
+    function profanityIn(tokens) {
 
         if (!tokens.length) {
             return false;
@@ -319,19 +305,18 @@
             return true;
         }
 
-        // 2. Woorden die zijn opgeknipt: "k u t", "fu ck", "f-u-c-k"
-        //    Opeenvolgende fragmenten van max. 2 letters worden samengevoegd.
+        // 2. Opgeknipte woorden: tot 4 opeenvolgende fragmenten, max 12 letters
         for (let i = 0; i < tokens.length; i++) {
 
             let joined = "";
 
             for (let j = i; j < tokens.length && j < i + 4; j++) {
 
-                if (tokens[j].length > 2) {
+                joined += tokens[j];
+
+                if (joined.length > 12) {
                     break;
                 }
-
-                joined += tokens[j];
 
                 if (PROFANITY_EXACT.has(squashRepeats(joined))) {
                     return true;
@@ -339,10 +324,14 @@
             }
         }
 
-        // 3. Alles aan elkaar, ook over woordgrenzen heen
+        // 3. Alles aan elkaar
         const compact = squashRepeats(tokens.join(""));
 
         return PROFANITY_CONTAINS.some(term => compact.includes(term));
+    }
+
+    function containsProfanityLocal(text) {
+        return profanityIn(analyzeText(text).tokens);
     }
 
     // ============================================================
@@ -357,21 +346,6 @@
     }
 
     /*
-     * True als de tekst een letter bevat die niet in het Latijnse schrift staat.
-     * Na NFKC zijn vette, fullwidth en superscript-letters al omgezet waar dat kan.
-     */
-    function isMostlyForeign(text) {
-
-        if (!CONFIG.blockForeignScripts) {
-            return false;
-        }
-
-        return Array.from(clean(text).normalize("NFKC")).some(
-            ch => /\p{L}/u.test(ch) && !/\p{Script=Latin}/u.test(ch)
-        );
-    }
-
-    /*
      * Geeft de melding terug als een bericht verborgen moet worden,
      * anders null. Scheldwoorden gaan voor de tekencheck.
      */
@@ -383,7 +357,9 @@
             return HIDDEN_LONG_TEXT;
         }
 
-        if (CONFIG.profanityLocal && containsProfanityLocal(raw)) {
+        const { tokens, unknown } = analyzeText(raw);
+
+        if (CONFIG.profanityLocal && profanityIn(tokens)) {
             return HIDDEN_TEXT;
         }
 
@@ -391,7 +367,7 @@
             return HIDDEN_LINK_TEXT;
         }
 
-        if (isMostlyForeign(raw)) {
+        if (CONFIG.blockForeignScripts && unknown) {
             return HIDDEN_CHARS_TEXT;
         }
 
@@ -609,14 +585,14 @@
             return message;
         }
 
-        // Elk bericht wordt gecontroleerd, ook als de tekst op een melding lijkt.
         const notice = moderationNotice(message.text);
 
         if (notice) {
             return { ...message, text: notice };
         }
 
-        if (isSpam(message)) {
+        // Eigen berichten zijn al gecontroleerd bij het verzenden.
+        if (!isOwnMessage(message) && isSpam(message)) {
             return { ...message, text: HIDDEN_SPAM_TEXT };
         }
 
