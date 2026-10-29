@@ -1,8 +1,7 @@
 /*
- * tampermonkey.js - the Somtoday script loader.
- * Put this file in the ROOT of the somtoday-scripts repo (NOT in scripts/,
- * otherwise it would try to load itself). The tiny userscript pulls it in
- * with @require, so the GM_* functions come from that userscript's @grant.
+ * tampermonkey.js - Somtoday loader + MOD 2.0 tab.
+ * Put this file in the ROOT of the somtoday-scripts repo. Mods live in scripts/.
+ * Mods are OFF by default. Enable them from the "SomToday MOD 2.0" tab.
  */
 (function () {
   'use strict';
@@ -13,6 +12,13 @@
   var BRANCH = 'main';
   var FOLDER = 'scripts';
   var CACHE_KEY = 'somtoday-loader-cache';
+  var MODS_KEY = 'somtoday-mods-enabled';   // localStorage: { "name.js": true }
+  var CACHE_FMT = 2;
+
+  var TAB = 'sl-account-modal-tab';
+  var MARK = 'data-mod-tab';
+  var LABEL = 'SomToday MOD 2.0';
+  var PANEL_ID = 'somtoday-mod-panel';
 
   var BASE = 'https://api.github.com/repos/' + OWNER + '/' + REPO + '/contents/';
   var LIST_URL = BASE + FOLDER + '?ref=' + encodeURIComponent(BRANCH);
@@ -26,6 +32,22 @@
   function warn() {
     console.warn.apply(console, ['[Somtoday Loader]'].concat([].slice.call(arguments)));
   }
+
+  /* ---------- enabled mods (localStorage, default off) ---------- */
+  function getEnabledMap() {
+    try {
+      var m = JSON.parse(window.localStorage.getItem(MODS_KEY) || '{}');
+      return (m && typeof m === 'object') ? m : {};
+    } catch (e) { return {}; }
+  }
+  function isEnabled(name) { return getEnabledMap()[name] === true; }
+  function setEnabled(name, on) {
+    var m = getEnabledMap();
+    if (on) m[name] = true; else delete m[name];
+    try { window.localStorage.setItem(MODS_KEY, JSON.stringify(m)); }
+    catch (e) { warn('could not save mod state:', e && e.message); }
+  }
+  function modLabel(fileName) { return fileName.replace(/\.js$/i, ''); }
 
   /* ---------- cache ---------- */
   function loadCache() {
@@ -47,9 +69,7 @@
     });
   }
 
-  /* ---------- network ----------
-     GM_xmlhttpRequest ignores the page's CSP/CORS. Resolves with
-     { status, text, etag }; 304 (Not Modified) counts as success. */
+  /* ---------- network ---------- */
   function request(url, headers) {
     return new Promise(function (resolve, reject) {
       GM_xmlhttpRequest({
@@ -70,10 +90,7 @@
     });
   }
 
-  /* ---------- folder listing ----------
-     Checked on EVERY page load with If-None-Match: when nothing changed
-     GitHub answers 304, which is instant and does not count against the
-     anonymous API rate limit. */
+  /* ---------- folder listing (checked every load, 304 if unchanged) ---------- */
   function getListing(cache) {
     var headers = { Accept: 'application/vnd.github+json' };
     if (cache.etag && cache.listing) headers['If-None-Match'] = cache.etag;
@@ -99,14 +116,8 @@
     });
   }
 
-  /* ---------- file contents ----------
-     Fetched through the API (raw media type), NOT raw.githubusercontent.com,
-     so there is no CDN delay. Only downloaded again when the SHA changed. */
-  /* Cache entries carry fmt:2. Entries from older loader versions (no fmt)
-     could hold OLD code saved under the NEW sha (stale CDN copy), so they
-     are never trusted and get downloaded again. */
-  var CACHE_FMT = 2;
-
+  /* ---------- file contents (only for enabled mods) ---------- */
+  /* Entries without fmt:2 came from older loaders and may hold stale code. */
   function getCode(file, cache) {
     var hit = cache.files[file.name];
     if (hit && hit.fmt === CACHE_FMT && hit.sha === file.sha) {
@@ -130,15 +141,7 @@
     });
   }
 
-  /* ---------- execution ----------
-     Tries, in order:
-       1) GM_addElement: Tampermonkey injects the <script> in a way that also
-          works when the page has a strict Content-Security-Policy;
-       2) a plain inline <script> element (page context);
-       3) new Function in the userscript sandbox.
-     A marker attribute set by the injected code tells us whether it ran. */
-  var runCounter = 0;
-
+  /* ---------- toast ---------- */
   function toast(msg) {
     try {
       var t = document.createElement('div');
@@ -150,6 +153,9 @@
       setTimeout(function () { t.remove(); }, 8000);
     } catch (e) {}
   }
+
+  /* ---------- execution ---------- */
+  var runCounter = 0;
 
   function run(name, code) {
     var id = 'sl' + (++runCounter);
@@ -188,32 +194,208 @@
     }
   }
 
-  /* ---------- main ---------- */
+  /* ---------- DOM helper ---------- */
+  function el(tag, attrs, children) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'text') n.textContent = attrs[k];
+      else if (k === 'style') n.style.cssText = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    (children || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+
+  /* ---------- MOD 2.0 tab ---------- */
+  var availableMods = null;   // [{name, sha}] once the folder listing is known
+  var modOpen = false;
+  var originalTitle = null;
+  var reloadNote = null;
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const getNav = () => $('sl-account-modal nav');
+  const getDetails = () => $('sl-account-modal-details');
+  const getContent = () => $('sl-account-modal-details > .content');
+  const getModTab = () => $(`${TAB}[${MARK}]`);
+
+  function setSelected(tab, selected) {
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+  }
+
+  function injectTab() {
+    const nav = getNav();
+    if (!nav || getModTab()) return;
+
+    const tabs = [...nav.querySelectorAll(`${TAB}:not([${MARK}])`)];
+    if (!tabs.length) return;
+
+    const template = tabs.find(t => !t.classList.contains('active')) || tabs[0];
+    const clone = template.cloneNode(true);
+    clone.setAttribute(MARK, '1');
+    setSelected(clone, false);
+
+    const span = clone.querySelector('span');
+    if (span) span.textContent = LABEL;
+
+    tabs[tabs.length - 1].after(clone);
+  }
+
+  function renderPanel() {
+    if (!modOpen) return;
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+
+    panel.textContent = '';
+    panel.appendChild(el('div', { style: 'font-weight:600;margin-bottom:4px', text: 'Mods' }));
+    panel.appendChild(el('div', {
+      style: 'opacity:.7;font-size:12px;margin-bottom:12px',
+      text: 'Off by default. Changes take effect after a reload.'
+    }));
+
+    if (availableMods === null) {
+      panel.appendChild(el('div', { text: 'Loading mods…' }));
+      return;
+    }
+    if (!availableMods.length) {
+      panel.appendChild(el('div', { text: 'No mods found in scripts/.' }));
+      return;
+    }
+
+    const reloadBtn = el('button', {
+      type: 'button',
+      text: 'Reload now',
+      style: 'padding:6px 12px;cursor:pointer;border-radius:6px;border:1px solid currentColor;background:transparent;color:inherit'
+    });
+    reloadBtn.addEventListener('click', () => location.reload());
+
+    const note = el('div', { style: 'display:none;margin-top:12px' }, [
+      el('span', { text: 'Reload to apply changes. ' }),
+      reloadBtn
+    ]);
+    reloadNote = note;
+
+    availableMods.forEach(f => {
+      const box = el('input', { type: 'checkbox' });
+      box.checked = isEnabled(f.name);
+      box.addEventListener('change', () => {
+        setEnabled(f.name, box.checked);
+        note.style.display = '';
+      });
+      panel.appendChild(el('label', {
+        style: 'display:flex;align-items:center;justify-content:space-between;padding:8px 0;cursor:pointer;border-bottom:1px solid rgba(128,128,128,.25)'
+      }, [el('span', { text: modLabel(f.name) }), box]));
+    });
+
+    panel.appendChild(note);
+  }
+
+  function openMod() {
+    const content = getContent();
+    const details = getDetails();
+    const nav = getNav();
+    if (!content || !details || !nav) return;
+
+    modOpen = true;
+    const modTab = getModTab();
+    nav.querySelectorAll(TAB).forEach(t => setSelected(t, t === modTab));
+
+    const title = details.querySelector('.title');
+    if (title) {
+      if (originalTitle === null) originalTitle = title.textContent;
+      title.textContent = LABEL;
+    }
+
+    content.style.display = 'none';
+
+    let panel = document.getElementById(PANEL_ID);
+    if (!panel) {
+      panel = el('div', { id: PANEL_ID, style: 'padding:16px;color:inherit;font-family:inherit;' });
+      content.after(panel);
+    }
+    panel.style.display = '';
+    renderPanel();
+  }
+
+  function closeMod(newTitle) {
+    const modTab = getModTab();
+    if (modTab) setSelected(modTab, false);
+
+    if (!modOpen) return;
+    modOpen = false;
+
+    const content = getContent();
+    if (content) content.style.display = '';
+
+    const panel = document.getElementById(PANEL_ID);
+    if (panel) panel.style.display = 'none';
+
+    const title = $('sl-account-modal-details .title');
+    if (title) title.textContent = newTitle || originalTitle || title.textContent;
+    originalTitle = null;
+  }
+
+  // Capture phase, never stops events, so Angular's tabs keep working.
+  document.addEventListener('click', (e) => {
+    const tab = e.target.closest?.(TAB);
+    if (!tab) return;
+    if (tab.hasAttribute(MARK)) openMod();
+    else closeMod(tab.querySelector('span')?.textContent.trim());
+  }, true);
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.(`${TAB}[${MARK}]`)) {
+      e.preventDefault();
+      openMod();
+    }
+  }, true);
+
+  let scheduled = false;
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      injectTab();
+      if (modOpen && !getModTab()) closeMod();
+    });
+  }
+  new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+  injectTab();
+
+  /* ---------- main: load only enabled mods ---------- */
   var cache = loadCache();
-  /* drop cache entries of files that no longer exist is handled below */
+
   getListing(cache).then(function (files) {
+    availableMods = files;
+    renderPanel();
+
     if (!files.length) { warn('no .js files found in ' + FOLDER + '/'); return; }
 
-    /* forget cached code of deleted files */
+    // forget cached code of deleted files
     var names = {};
     files.forEach(function (f) { names[f.name] = true; });
     Object.keys(cache.files).forEach(function (n) { if (!names[n]) delete cache.files[n]; });
 
-    return Promise.all(files.map(function (f) {
+    var enabled = files.filter(function (f) { return isEnabled(f.name); });
+    if (!enabled.length) { log('no mods enabled'); return; }
+
+    return Promise.all(enabled.map(function (f) {
       return getCode(f, cache).then(
         function (code) { return { name: f.name, code: code }; },
         function (err) { warn('skipping ' + f.name + ':', err.message); return null; }
       );
     })).then(function (loaded) {
-      /* alphabetical order; one failing script never stops the rest */
       loaded.forEach(function (s) {
         if (!s) return;
         try { run(s.name, s.code); }
         catch (e) { console.error('[Somtoday Loader] ' + s.name + ' failed:', e); }
       });
-      log('done, ' + loaded.filter(Boolean).length + ' script(s) loaded');
+      log('done, ' + loaded.filter(Boolean).length + ' of ' + files.length + ' mod(s) loaded');
     });
   }).catch(function (err) {
+    availableMods = availableMods || [];
+    renderPanel();
     console.error('[Somtoday Loader] could not load scripts:', err);
   });
 })();
