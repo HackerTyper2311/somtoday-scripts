@@ -512,8 +512,12 @@
     toast: toast
   };
 
-  window.SomtodayMods = publicAPI;
+var apiWindow =
+  typeof unsafeWindow !== 'undefined'
+    ? unsafeWindow
+    : window;
 
+apiWindow.SomtodayMods = publicAPI;
   /* ---------- MOD 2.0 switch ---------- */
   function buildToggle(on) {
     var host = document.createElement('span');
