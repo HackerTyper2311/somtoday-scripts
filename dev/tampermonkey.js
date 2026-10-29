@@ -1,8 +1,3 @@
-/*
- * tampermonkey.js - Somtoday loader + MOD 2.0 tab.
- * Put this file in the ROOT of the somtoday-scripts repo. Mods live in scripts/.
- * Mods are OFF by default. Enable them from the "SomToday MOD 2.0" tab.
- */
 (function () {
   'use strict';
 
@@ -194,56 +189,164 @@
     }
   }
 
-  /* ---------- DOM helper ---------- */
-  function el(tag, attrs, children) {
-    var n = document.createElement(tag);
-    if (attrs) Object.keys(attrs).forEach(function (k) {
-      if (k === 'text') n.textContent = attrs[k];
-      else if (k === 'style') n.style.cssText = attrs[k];
-      else n.setAttribute(k, attrs[k]);
-    });
-    (children || []).forEach(function (c) { if (c) n.appendChild(c); });
-    return n;
-  }
-
   /* ---------- MOD 2.0 tab ---------- */
   var availableMods = null;   // [{name, sha}] once the folder listing is known
   var modOpen = false;
   var originalTitle = null;
 
   /*
-   * Fallback styles, used only when no native Somtoday settings row is on the
-   * page to clone. !important forces the look, because Somtoday's own scoped
-   * styles don't reach elements we create.
+   * Native Somtoday elements, captured as detached copies so they survive
+   * Angular re-renders. Cloning keeps the _ngcontent-* attributes, which is
+   * what makes Somtoday's own scoped styles apply to our panel.
    */
-  var MOD_CSS = [
-    '#' + PANEL_ID + ' { display: block !important; padding: 8px 0 !important; font-family: inherit !important; color: var(--fg-neutral-strong, #222) !important; box-sizing: border-box !important; }',
-    '#' + PANEL_ID + ' .sl-mod-item { display: flex !important; align-items: center !important; justify-content: space-between !important; gap: 16px !important; padding: 16px 24px !important; min-height: 56px !important; box-sizing: border-box !important; cursor: pointer !important; background: transparent !important; }',
-    '#' + PANEL_ID + ' .sl-mod-item:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)) !important; }',
-    '#' + PANEL_ID + ' .sl-mod-item:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4) !important; outline-offset: -2px !important; }',
-    '#' + PANEL_ID + ' .sl-mod-text { display: block !important; flex: 1 1 auto !important; min-width: 0 !important; }',
-    '#' + PANEL_ID + ' .settings-label { display: block !important; font-size: 16px !important; line-height: 22px !important; font-weight: 400 !important; color: var(--fg-neutral-strong, #222) !important; }',
-    '#' + PANEL_ID + ' .settings-subtext { display: block !important; font-size: 13px !important; line-height: 18px !important; color: var(--fg-neutral-moderate, #666) !important; margin-top: 2px !important; }',
-    '#' + PANEL_ID + ' .setting-divider { display: block !important; height: 1px !important; margin: 0 24px !important; background: var(--border-neutral-weak, #e5e5e5) !important; }',
-    '#' + PANEL_ID + ' hmy-toggle { display: inline-block !important; flex: 0 0 auto !important; position: relative !important; width: 44px !important; height: 24px !important; cursor: pointer !important; }',
-    '#' + PANEL_ID + ' hmy-toggle .toggle { position: relative !important; width: 44px !important; height: 24px !important; }',
-    '#' + PANEL_ID + ' hmy-toggle input { position: absolute !important; opacity: 0 !important; width: 0 !important; height: 0 !important; margin: 0 !important; pointer-events: none !important; }',
-    '#' + PANEL_ID + ' hmy-toggle .slider { position: absolute !important; inset: 0 !important; border-radius: 999px !important; background: var(--bg-neutral-strong, #bdbdbd) !important; transition: background 150ms ease !important; }',
-    '#' + PANEL_ID + ' hmy-toggle .slider::before { content: "" !important; position: absolute !important; left: 3px !important; top: 3px !important; width: 18px !important; height: 18px !important; border-radius: 50% !important; background: #fff !important; box-shadow: 0 1px 3px rgba(0,0,0,.3) !important; transition: transform 150ms ease !important; }',
-    '#' + PANEL_ID + ' hmy-toggle input:checked + .slider { background: var(--action-primary-normal, #3565d4) !important; }',
-    '#' + PANEL_ID + ' hmy-toggle input:checked + .slider::before { transform: translateX(20px) !important; }',
-    '#' + PANEL_ID + ' .mod-intro { padding: 8px 24px 16px !important; font-size: 13px !important; line-height: 18px !important; color: var(--fg-neutral-moderate, #666) !important; }',
-    '#' + PANEL_ID + ' .mod-note { display: none; margin: 12px 24px 0 !important; padding: 10px 12px !important; border-radius: 8px !important; font-size: 13px !important; background: var(--bg-neutral-weakest, #f5f5f5) !important; color: var(--fg-neutral-strong, #222) !important; }',
-    '#' + PANEL_ID + ' .mod-note button { margin-left: 8px !important; padding: 4px 12px !important; border-radius: 6px !important; cursor: pointer !important; border: 1px solid currentColor !important; background: transparent !important; color: inherit !important; font: inherit !important; }',
-    '#' + PANEL_ID + ' .mod-empty { padding: 16px 24px !important; font-size: 14px !important; color: var(--fg-neutral-moderate, #666) !important; }'
-  ].join('\n');
+  var tpl = { shell: null, subtitle: null, row: null, label: null, divider: null };
 
-  function injectModStyles() {
-    if (document.getElementById('somtoday-mod-style')) return;
-    var s = document.createElement('style');
-    s.id = 'somtoday-mod-style';
-    s.textContent = MOD_CSS;
-    (document.head || document.documentElement).appendChild(s);
+  function captureTemplates() {
+    var rows = document.querySelectorAll('.settings');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r.closest('#' + PANEL_ID)) continue;          // skip our own rows
+      if (r.querySelector('.setting-preview')) continue;  // plain rows only
+      if (!r.querySelector('hmy-toggle')) continue;
+      var label = r.querySelector('.settings-span');
+      if (!label) continue;
+
+      var wrapper = r.closest('.weergave-wrapper') || r.parentElement;
+      var sub = wrapper.querySelector(':scope > .subtitle');
+      var div = wrapper.querySelector(':scope > .setting-divider');
+
+      tpl.row = r.cloneNode(true);
+      tpl.label = label.cloneNode(false);
+      tpl.shell = wrapper.cloneNode(false);
+      tpl.subtitle = sub ? sub.cloneNode(false) : null;
+      tpl.divider = div ? div.cloneNode(false) : null;
+      return true;
+    }
+    return false;
+  }
+
+  // New element that copies the native class and scope attributes of a source node.
+  function makeLike(tag, source, text) {
+    var n = document.createElement(tag);
+    if (source) {
+      n.className = source.className;
+      for (var i = 0; i < source.attributes.length; i++) {
+        var a = source.attributes[i];
+        if (a.name.indexOf('_ngcontent') === 0) n.setAttribute(a.name, a.value);
+      }
+    }
+    n.textContent = text;
+    return n;
+  }
+
+  function applyState(row, on) {
+    var toggle = row.querySelector('hmy-toggle');
+    var input = toggle && toggle.querySelector('input');
+    if (input) input.checked = on;
+    if (toggle) toggle.setAttribute('aria-checked', String(on));
+    row.setAttribute('aria-checked', String(on));
+  }
+
+  function buildNote() {
+    var note = makeLike('div', tpl.label, 'Herlaad de pagina om de wijziging toe te passen.');
+    note.style.display = 'none';
+    note.style.padding = '12px 24px 0';
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Nu opnieuw laden';
+    btn.style.cssText = 'margin-left:12px;cursor:pointer;background:transparent;color:inherit;' +
+      'border:1px solid rgba(128,128,128,.6);border-radius:6px;padding:4px 10px;' +
+      'font:inherit;font-size:13px';
+    btn.addEventListener('click', function () { location.reload(); });
+
+    note.appendChild(btn);
+    return note;
+  }
+
+  function buildRow(f, note) {
+    var on = isEnabled(f.name);
+    var row = tpl.row.cloneNode(true);
+
+    // Plain row: drop the preview chip and the profile-photo variant.
+    row.classList.remove('with-preview', 'profielfoto-optie');
+    row.querySelectorAll('.setting-preview').forEach(function (n) { n.remove(); });
+    row.removeAttribute('data-gtm');
+
+    var label = row.querySelector('.settings-span');
+    if (label) {
+      label.textContent = modLabel(f.name);
+    }
+
+    var toggle = row.querySelector('hmy-toggle');
+    if (toggle) {
+      toggle.removeAttribute('data-gtm');
+      toggle.removeAttribute('tabindex');
+      toggle.setAttribute('aria-hidden', 'true');
+      toggle.setAttribute('aria-label', modLabel(f.name));
+    }
+
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('role', 'checkbox');
+    row.setAttribute('aria-label', modLabel(f.name));
+    row.style.cursor = 'pointer';
+    applyState(row, on);
+
+    function flip() {
+      var next = !isEnabled(f.name);
+      setEnabled(f.name, next);
+      applyState(row, next);
+      note.style.display = 'block';
+    }
+
+    row.addEventListener('click', function (e) {
+      e.preventDefault();
+      flip();
+    });
+    row.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        flip();
+      }
+    });
+
+    return row;
+  }
+
+  function renderPanel() {
+    if (!modOpen) return;
+    var panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+
+    panel.textContent = '';
+
+    if (!tpl.row) {
+      panel.appendChild(makeLike('span', tpl.label,
+        'Open eerst de tab Weergave in Instellingen en open daarna SomToday MOD 2.0 opnieuw.'));
+      return;
+    }
+
+    if (tpl.subtitle) {
+      panel.appendChild(makeLike('div', tpl.subtitle, 'Mods'));
+    }
+
+    if (availableMods === null) {
+      panel.appendChild(makeLike('span', tpl.label, 'Mods laden…'));
+      return;
+    }
+    if (!availableMods.length) {
+      panel.appendChild(makeLike('span', tpl.label, 'Geen mods gevonden in scripts/.'));
+      return;
+    }
+
+    var note = buildNote();
+
+    availableMods.forEach(function (f, i) {
+      if (tpl.divider && i > 0) panel.appendChild(tpl.divider.cloneNode(true));
+      panel.appendChild(buildRow(f, note));
+    });
+
+    panel.appendChild(note);
   }
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -275,142 +378,13 @@
     tabs[tabs.length - 1].after(clone);
   }
 
-  /* ---------- rows ---------- */
-
-  // A native sl-setting-item that is on the page, not one of ours.
-  function findNativeItem() {
-    var items = document.querySelectorAll('sl-setting-item');
-    for (var i = 0; i < items.length; i++) {
-      var n = items[i];
-      if (n.closest('#' + PANEL_ID)) continue;
-      if (n.querySelector('hmy-toggle .slider')) return n;
-    }
-    return null;
-  }
-
-  function setRowState(row, on) {
-    var tog = row.querySelector('hmy-toggle');
-    var box = row.querySelector('hmy-toggle input');
-    if (tog) tog.setAttribute('aria-checked', String(on));
-    if (box) box.checked = on;
-  }
-
-  // Preferred: clone a real Somtoday row so Angular-scoped styles still apply.
-  function buildNativeRow(f, on) {
-    var native = findNativeItem();
-    if (!native) return null;
-
-    var row = native.cloneNode(true);
-    row.classList.add('sl-mod-item');
-    row.removeAttribute('label');
-    row.removeAttribute('subtext');
-    row.removeAttribute('arialabel');
-
-    var lbl = row.querySelector('.settings-label');
-    if (lbl) lbl.textContent = modLabel(f.name);
-
-    var sub = row.querySelector('.settings-subtext');
-    if (sub) sub.textContent = 'Mod. Staat standaard uit.';
-
-    var tog = row.querySelector('hmy-toggle');
-    if (tog) tog.setAttribute('aria-label', modLabel(f.name));
-
-    setRowState(row, on);
-    return row;
-  }
-
-  // Fallback: same class names and structure, styled by MOD_CSS.
-  function buildFallbackRow(f, on) {
-    var input = el('input', { type: 'checkbox', tabindex: '-1' });
-    input.checked = on;
-
-    var toggle = el('hmy-toggle', {
-      tabindex: '0',
-      role: 'checkbox',
-      'aria-label': modLabel(f.name),
-      'aria-checked': String(on)
-    }, [
-      el('div', { class: 'toggle' }, [input, el('div', { class: 'slider' })])
-    ]);
-
-    var text = el('div', { class: 'sl-mod-text' }, [
-      el('span', { class: 'settings-label', text: modLabel(f.name) }),
-      el('span', { class: 'settings-subtext', text: 'Mod. Staat standaard uit.' })
-    ]);
-
-    return el('div', { class: 'sl-mod-item' }, [text, toggle]);
-  }
-
-  function buildRow(f) {
-    var on = isEnabled(f.name);
-    var row = buildNativeRow(f, on) || buildFallbackRow(f, on);
-
-    var noteRef = null;
-    row.addEventListener('click', function (e) {
-      // Let the toggle itself pass through; the row handles the click either way.
-      e.preventDefault();
-      var next = !isEnabled(f.name);
-      setEnabled(f.name, next);
-      setRowState(row, next);
-      if (noteRef) noteRef.style.display = '';
-    });
-
-    row.setAttribute('tabindex', '0');
-    row.setAttribute('role', 'checkbox');
-    row.setAttribute('aria-checked', String(on));
-    row.setAttribute('aria-label', modLabel(f.name));
-    row.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        row.click();
-      }
-    });
-
-    row._setNoteRef = function (n) { noteRef = n; };
-    return row;
-  }
-
-  function renderPanel() {
-    if (!modOpen) return;
-    var panel = document.getElementById(PANEL_ID);
-    if (!panel) return;
-
-    panel.textContent = '';
-
-    if (availableMods === null) {
-      panel.appendChild(el('div', { class: 'mod-empty', text: 'Mods laden…' }));
-      return;
-    }
-    if (!availableMods.length) {
-      panel.appendChild(el('div', { class: 'mod-empty', text: 'Geen mods gevonden in scripts/.' }));
-      return;
-    }
-
-    var reloadBtn = el('button', { type: 'button', text: 'Nu opnieuw laden' });
-    reloadBtn.addEventListener('click', function () { location.reload(); });
-
-    var note = el('div', { class: 'mod-note' }, [
-      el('span', { text: 'Herlaad de pagina om de wijziging toe te passen.' }),
-      reloadBtn
-    ]);
-
-    availableMods.forEach(function (f, i) {
-      if (i > 0) panel.appendChild(el('div', { class: 'setting-divider' }));
-      var row = buildRow(f);
-      if (row._setNoteRef) row._setNoteRef(note);
-      panel.appendChild(row);
-    });
-
-    panel.appendChild(note);
-  }
-
   function openMod() {
     const content = getContent();
     const details = getDetails();
     const nav = getNav();
     if (!content || !details || !nav) return;
 
-    injectModStyles();
+    captureTemplates();
 
     modOpen = true;
     const modTab = getModTab();
@@ -424,12 +398,15 @@
 
     content.style.display = 'none';
 
-    let panel = document.getElementById(PANEL_ID);
-    if (!panel) {
-      panel = el('div', { id: PANEL_ID });
-      content.after(panel);
-    }
+    // Rebuild the panel each time so it always matches the current native look.
+    const old = document.getElementById(PANEL_ID);
+    if (old) old.remove();
+
+    const panel = tpl.shell ? tpl.shell.cloneNode(false) : document.createElement('div');
+    panel.id = PANEL_ID;
     panel.style.display = '';
+    content.after(panel);
+
     renderPanel();
   }
 
@@ -473,11 +450,13 @@
     requestAnimationFrame(() => {
       scheduled = false;
       injectTab();
+      if (!modOpen) captureTemplates();   // keep templates fresh while browsing Instellingen
       if (modOpen && !getModTab()) closeMod();
     });
   }
   new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
   injectTab();
+  captureTemplates();
 
   /* ---------- main: load only enabled mods ---------- */
   var cache = loadCache();
