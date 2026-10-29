@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.8.0
+     * Versie: 2.9.0
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.8.0",
+        version: "2.9.0",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -42,16 +42,19 @@
         // Duplicaatcontrole
         duplicateWindowMs: 2 * 60 * 1000,
 
+        // Cooldown tussen verzonden berichten
+        sendCooldownMs: 5000,
+
         // Profanity-filter
         profanityEnabled: true,      // hoofdschakelaar
         profanityLocal: true,        // laag 1: lokaal filter
         profanityExternal: true,     // laag 2: profanity.dev
         profanityApi: "https://vector.profanity.dev",
         profanityTimeout: 3000,
-        profanityFailClosed: true,  // true = blokkeren als externe check faalt
+        profanityFailClosed: false,  // true = blokkeren als externe check faalt
 
-        // Spamfilter
-        spamWindowMs: 5000,
+        // Spamfilter (alleen ontvangen berichten)
+        spamWindowMs: 10000,
         spamMaxPerWindow: 20,
         spamMaxSame: 10,
         spamMinuteWindowMs: 60 * 1000,
@@ -93,6 +96,7 @@
     let pubnubConnected = false;
     let historyLoaded = false;
     let syncRunning = false;
+    let lastSentAt = 0;
 
     /*
      * message.id -> message
@@ -105,7 +109,7 @@
     const seenTexts = new Map();
 
     /*
-     * Spam-index: userId -> [{ text, time }]
+     * Spam-index voor ontvangen berichten: userId -> [{ text, time }]
      */
     const recentByUser = new Map();
 
@@ -338,7 +342,6 @@
     /*
      * True als de tekst een letter bevat die niet in het Latijnse schrift staat.
      * Na NFKC zijn vette, fullwidth en superscript-letters al omgezet waar dat kan.
-     * Eén niet-Latijnse letter is genoeg; dat vangt ook mengvormen.
      */
     function isMostlyForeign(text) {
 
@@ -353,8 +356,7 @@
 
     /*
      * Geeft de melding terug als een bericht verborgen moet worden,
-     * anders null. Scheldwoorden gaan voor de tekencheck, zodat
-     * mengvormen als "ᶠᶸᶜᵏᵧₒᵤ" de juiste melding krijgen.
+     * anders null. Scheldwoorden gaan voor de tekencheck.
      */
     function moderationNotice(text) {
 
@@ -380,7 +382,7 @@
     }
 
     // ============================================================
-    // SPAMFILTER (LOKAAL)
+    // SPAMFILTER (ONTVANGEN BERICHTEN)
     // ============================================================
 
     function isSpam(message) {
@@ -419,7 +421,6 @@
             return true;
         }
 
-        // Vangt losse letters of woorden die één voor één binnenkomen.
         return history.length > CONFIG.spamMaxPerMinute;
     }
 
@@ -1358,23 +1359,27 @@
         const now = Date.now();
 
         /*
+         * Cooldown tussen verzonden berichten.
+         */
+
+        const sinceLast = now - lastSentAt;
+
+        if (sinceLast < CONFIG.sendCooldownMs) {
+
+            const wait = Math.ceil(
+                (CONFIG.sendCooldownMs - sinceLast) / 1000
+            );
+
+            setStatus("Wacht " + wait + " seconde(n) voor je een nieuw bericht stuurt");
+            return;
+        }
+
+        /*
          * Duplicaat: dezelfde tekst binnen 2 minuten.
          */
 
         if (isRecentDuplicate(currentUser.id, text, now, "")) {
             setStatus("Dit bericht is al binnen 2 minuten verstuurd");
-            return;
-        }
-
-        /*
-         * Spam vóór de externe check.
-         */
-
-        if (
-            CONFIG.profanityEnabled &&
-            isSpam({ text, userId: currentUser.id, timestamp: now })
-        ) {
-            setStatus("Even wachten: te veel berichten of spam");
             return;
         }
 
@@ -1400,6 +1405,8 @@
 
         messageInput.value = "";
         autoResizeInput();
+
+        lastSentAt = now;
 
         window.postMessage({
             source: "SOMTODAY_PUBNUB_USERSCRIPT",
