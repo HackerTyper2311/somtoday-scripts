@@ -210,28 +210,32 @@
   var availableMods = null;   // [{name, sha}] once the folder listing is known
   var modOpen = false;
   var originalTitle = null;
-  var reloadNote = null;
 
+  /*
+   * Fallback styles, used only when no native Somtoday settings row is on the
+   * page to clone. !important forces the look, because Somtoday's own scoped
+   * styles don't reach elements we create.
+   */
   var MOD_CSS = [
-    '#' + PANEL_ID + ' { padding: 8px 0; font-family: inherit; color: var(--fg-neutral-strong, #222); }',
-    '.mod-intro { font-size: 13px; line-height: 18px; color: var(--fg-neutral-moderate, #666); padding: 4px 16px 12px; }',
-    '.settings { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--border-neutral-weak, #e5e5e5); cursor: pointer; }',
-    '.settings:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)); }',
-    '.settings-span { flex: 1; min-width: 0; font-size: 15px; line-height: 20px; color: var(--fg-neutral-strong, #222); }',
-    '.settings-sub { display: block; font-size: 12px; line-height: 16px; color: var(--fg-neutral-moderate, #666); margin-top: 2px; }',
-    '.setting-preview { flex: 0 0 auto; min-width: 36px; height: 28px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; background: var(--bg-neutral-weak, #eee); color: var(--fg-neutral-moderate, #555); }',
-    '.setting-preview.on { background: var(--bg-positive-weakest, #e6f4ea); color: var(--fg-on-positive-weakest, #1e7a3a); }',
-    'hmy-toggle { display: inline-block; flex: 0 0 auto; }',
-    '.toggle { position: relative; width: 44px; height: 24px; }',
-    '.toggle input { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; pointer-events: none; }',
-    '.slider { position: absolute; inset: 0; border-radius: 999px; background: var(--bg-neutral-strong, #bdbdbd); transition: background 150ms ease; }',
-    '.slider::before { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform 150ms ease; }',
-    '.toggle input:checked + .slider { background: var(--action-primary-normal, #3565d4); }',
-    '.toggle input:checked + .slider::before { transform: translateX(20px); }',
-    '.toggle-focus:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4); outline-offset: 2px; border-radius: 999px; }',
-    '.mod-note { display: none; margin: 12px 16px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; background: var(--bg-neutral-weakest, #f5f5f5); color: var(--fg-neutral-strong, #222); }',
-    '.mod-note button { margin-left: 8px; padding: 4px 12px; border-radius: 6px; cursor: pointer; border: 1px solid currentColor; background: transparent; color: inherit; font: inherit; }',
-    '.mod-empty { padding: 16px; font-size: 14px; color: var(--fg-neutral-moderate, #666); }'
+    '#' + PANEL_ID + ' { display: block !important; padding: 8px 0 !important; font-family: inherit !important; color: var(--fg-neutral-strong, #222) !important; box-sizing: border-box !important; }',
+    '#' + PANEL_ID + ' .sl-mod-item { display: flex !important; align-items: center !important; justify-content: space-between !important; gap: 16px !important; padding: 16px 24px !important; min-height: 56px !important; box-sizing: border-box !important; cursor: pointer !important; background: transparent !important; }',
+    '#' + PANEL_ID + ' .sl-mod-item:hover { background: var(--bg-neutral-weakest, rgba(0,0,0,.03)) !important; }',
+    '#' + PANEL_ID + ' .sl-mod-item:focus-visible { outline: 2px solid var(--action-primary-normal, #3565d4) !important; outline-offset: -2px !important; }',
+    '#' + PANEL_ID + ' .sl-mod-text { display: block !important; flex: 1 1 auto !important; min-width: 0 !important; }',
+    '#' + PANEL_ID + ' .settings-label { display: block !important; font-size: 16px !important; line-height: 22px !important; font-weight: 400 !important; color: var(--fg-neutral-strong, #222) !important; }',
+    '#' + PANEL_ID + ' .settings-subtext { display: block !important; font-size: 13px !important; line-height: 18px !important; color: var(--fg-neutral-moderate, #666) !important; margin-top: 2px !important; }',
+    '#' + PANEL_ID + ' .setting-divider { display: block !important; height: 1px !important; margin: 0 24px !important; background: var(--border-neutral-weak, #e5e5e5) !important; }',
+    '#' + PANEL_ID + ' hmy-toggle { display: inline-block !important; flex: 0 0 auto !important; position: relative !important; width: 44px !important; height: 24px !important; cursor: pointer !important; }',
+    '#' + PANEL_ID + ' hmy-toggle .toggle { position: relative !important; width: 44px !important; height: 24px !important; }',
+    '#' + PANEL_ID + ' hmy-toggle input { position: absolute !important; opacity: 0 !important; width: 0 !important; height: 0 !important; margin: 0 !important; pointer-events: none !important; }',
+    '#' + PANEL_ID + ' hmy-toggle .slider { position: absolute !important; inset: 0 !important; border-radius: 999px !important; background: var(--bg-neutral-strong, #bdbdbd) !important; transition: background 150ms ease !important; }',
+    '#' + PANEL_ID + ' hmy-toggle .slider::before { content: "" !important; position: absolute !important; left: 3px !important; top: 3px !important; width: 18px !important; height: 18px !important; border-radius: 50% !important; background: #fff !important; box-shadow: 0 1px 3px rgba(0,0,0,.3) !important; transition: transform 150ms ease !important; }',
+    '#' + PANEL_ID + ' hmy-toggle input:checked + .slider { background: var(--action-primary-normal, #3565d4) !important; }',
+    '#' + PANEL_ID + ' hmy-toggle input:checked + .slider::before { transform: translateX(20px) !important; }',
+    '#' + PANEL_ID + ' .mod-intro { padding: 8px 24px 16px !important; font-size: 13px !important; line-height: 18px !important; color: var(--fg-neutral-moderate, #666) !important; }',
+    '#' + PANEL_ID + ' .mod-note { display: none; margin: 12px 24px 0 !important; padding: 10px 12px !important; border-radius: 8px !important; font-size: 13px !important; background: var(--bg-neutral-weakest, #f5f5f5) !important; color: var(--fg-neutral-strong, #222) !important; }',
+    '#' + PANEL_ID + ' .mod-note button { margin-left: 8px !important; padding: 4px 12px !important; border-radius: 6px !important; cursor: pointer !important; border: 1px solid currentColor !important; background: transparent !important; color: inherit !important; font: inherit !important; }',
+    '#' + PANEL_ID + ' .mod-empty { padding: 16px 24px !important; font-size: 14px !important; color: var(--fg-neutral-moderate, #666) !important; }'
   ].join('\n');
 
   function injectModStyles() {
@@ -271,17 +275,107 @@
     tabs[tabs.length - 1].after(clone);
   }
 
+  /* ---------- rows ---------- */
+
+  // A native sl-setting-item that is on the page, not one of ours.
+  function findNativeItem() {
+    var items = document.querySelectorAll('sl-setting-item');
+    for (var i = 0; i < items.length; i++) {
+      var n = items[i];
+      if (n.closest('#' + PANEL_ID)) continue;
+      if (n.querySelector('hmy-toggle .slider')) return n;
+    }
+    return null;
+  }
+
+  function setRowState(row, on) {
+    var tog = row.querySelector('hmy-toggle');
+    var box = row.querySelector('hmy-toggle input');
+    if (tog) tog.setAttribute('aria-checked', String(on));
+    if (box) box.checked = on;
+  }
+
+  // Preferred: clone a real Somtoday row so Angular-scoped styles still apply.
+  function buildNativeRow(f, on) {
+    var native = findNativeItem();
+    if (!native) return null;
+
+    var row = native.cloneNode(true);
+    row.classList.add('sl-mod-item');
+    row.removeAttribute('label');
+    row.removeAttribute('subtext');
+    row.removeAttribute('arialabel');
+
+    var lbl = row.querySelector('.settings-label');
+    if (lbl) lbl.textContent = modLabel(f.name);
+
+    var sub = row.querySelector('.settings-subtext');
+    if (sub) sub.textContent = 'Mod. Staat standaard uit.';
+
+    var tog = row.querySelector('hmy-toggle');
+    if (tog) tog.setAttribute('aria-label', modLabel(f.name));
+
+    setRowState(row, on);
+    return row;
+  }
+
+  // Fallback: same class names and structure, styled by MOD_CSS.
+  function buildFallbackRow(f, on) {
+    var input = el('input', { type: 'checkbox', tabindex: '-1' });
+    input.checked = on;
+
+    var toggle = el('hmy-toggle', {
+      tabindex: '0',
+      role: 'checkbox',
+      'aria-label': modLabel(f.name),
+      'aria-checked': String(on)
+    }, [
+      el('div', { class: 'toggle' }, [input, el('div', { class: 'slider' })])
+    ]);
+
+    var text = el('div', { class: 'sl-mod-text' }, [
+      el('span', { class: 'settings-label', text: modLabel(f.name) }),
+      el('span', { class: 'settings-subtext', text: 'Mod. Staat standaard uit.' })
+    ]);
+
+    return el('div', { class: 'sl-mod-item' }, [text, toggle]);
+  }
+
+  function buildRow(f) {
+    var on = isEnabled(f.name);
+    var row = buildNativeRow(f, on) || buildFallbackRow(f, on);
+
+    var noteRef = null;
+    row.addEventListener('click', function (e) {
+      // Let the toggle itself pass through; the row handles the click either way.
+      e.preventDefault();
+      var next = !isEnabled(f.name);
+      setEnabled(f.name, next);
+      setRowState(row, next);
+      if (noteRef) noteRef.style.display = '';
+    });
+
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('role', 'checkbox');
+    row.setAttribute('aria-checked', String(on));
+    row.setAttribute('aria-label', modLabel(f.name));
+    row.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        row.click();
+      }
+    });
+
+    row._setNoteRef = function (n) { noteRef = n; };
+    return row;
+  }
+
   function renderPanel() {
     if (!modOpen) return;
     var panel = document.getElementById(PANEL_ID);
     if (!panel) return;
 
     panel.textContent = '';
-
-    panel.appendChild(el('div', {
-      class: 'mod-intro',
-      text: 'Mods staan standaard uit. Wijzigingen werken na het opnieuw laden van de pagina.'
-    }));
 
     if (availableMods === null) {
       panel.appendChild(el('div', { class: 'mod-empty', text: 'Mods laden…' }));
@@ -299,47 +393,11 @@
       el('span', { text: 'Herlaad de pagina om de wijziging toe te passen.' }),
       reloadBtn
     ]);
-    reloadNote = note;
 
-    availableMods.forEach(function (f) {
-      var on = isEnabled(f.name);
-
-      var input = el('input', { type: 'checkbox' });
-      input.checked = on;
-
-      var slider = el('div', { class: 'slider' });
-      var toggleInner = el('div', { class: 'toggle' }, [input, slider]);
-
-      var toggle = el('hmy-toggle', {
-        class: 'toggle-focus',
-        tabindex: '0',
-        role: 'checkbox',
-        'aria-label': modLabel(f.name),
-        'aria-checked': String(on)
-      }, [toggleInner]);
-
-      var label = el('span', { class: 'settings-span', text: modLabel(f.name) });
-      var preview = el('span', { class: 'setting-preview' + (on ? ' on' : ''), text: on ? 'Aan' : 'Uit' });
-
-      var row = el('div', { class: 'settings' }, [label, preview, toggle]);
-
-      function flip(next) {
-        input.checked = next;
-        toggle.setAttribute('aria-checked', String(next));
-        preview.textContent = next ? 'Aan' : 'Uit';
-        preview.classList.toggle('on', next);
-        setEnabled(f.name, next);
-        note.style.display = '';
-      }
-
-      row.addEventListener('click', function () { flip(!input.checked); });
-      toggle.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          flip(!input.checked);
-        }
-      });
-
+    availableMods.forEach(function (f, i) {
+      if (i > 0) panel.appendChild(el('div', { class: 'setting-divider' }));
+      var row = buildRow(f);
+      if (row._setNoteRef) row._setNoteRef(note);
       panel.appendChild(row);
     });
 
