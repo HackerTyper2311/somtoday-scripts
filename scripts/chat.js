@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.9.3
+     * Versie: 2.10.0
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.9.3",
+        version: "2.10.0",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -53,7 +53,7 @@
         profanityTimeout: 3000,
         profanityFailClosed: false,  // true = blokkeren als externe check faalt
 
-        // Spamfilter (alleen ontvangen berichten)
+        // Spamfilter (alleen live ontvangen berichten van anderen)
         spamWindowMs: 10000,
         spamMaxPerWindow: 20,
         spamMaxSame: 10,
@@ -63,7 +63,7 @@
         // Extra filters
         maxMessageLength: 300,       // langere berichten worden verborgen
         blockLinks: true,            // links worden verborgen
-        blockForeignScripts: true    // berichten met onleesbare tekens worden verborgen
+        blockUnreadable: true        // berichten met onleesbare tekens worden verborgen
     };
 
     const STORAGE_PREFIX = "somtoday-school-chat";
@@ -90,12 +90,13 @@
     let chatOpen = false;
     let observer = null;
     let pubnubConnected = false;
-    let historyLoaded = false;
     let syncRunning = false;
+    let sending = false;
     let lastSentAt = 0;
 
     /*
-     * message.id -> message
+     * message.id -> { id, userId, name, text (origineel), timestamp, notice }
+     * notice = null of de melding die in plaats van de tekst wordt getoond.
      */
     const messageMap = new Map();
 
@@ -105,7 +106,7 @@
     const seenTexts = new Map();
 
     /*
-     * Spam-index voor ontvangen berichten: userId -> [{ text, time }]
+     * Spam-index voor live berichten van anderen: userId -> [{ text, time }]
      */
     const recentByUser = new Map();
 
@@ -200,7 +201,17 @@
     }
 
     // ============================================================
-    // PROFANITY: LAAG 1 (LOKAAL)
+    // PROFANITY: TEKST ANALYSE (LAAG 1, LOKAAL)
+    // ============================================================
+    //
+    // Werkwijze:
+    // 1. NFKD haalt stijlletters terug naar gewone letters (𝒹 -> d, ℊ -> g,
+    //    fullwidth, ligaturen, cirkel- en vetletters).
+    // 2. Accenten en onzichtbare tekens worden verwijderd.
+    // 3. Leetspeak-cijfers en symbolen worden letters.
+    // 4. Alles wat geen a-z is en niet als scheiding of emoji telt, maakt het
+    //    bericht "onleesbaar". Zo kan niets worden verstopt in tekens die de
+    //    filter niet kent.
     // ============================================================
 
     function squashRepeats(text) {
@@ -210,17 +221,29 @@
     // Leetspeak: symbolen en cijfers die als letter worden gebruikt
     const LEET = {
         "@": "a", "4": "a", "3": "e", "1": "i", "!": "i", "|": "i",
-        "0": "o", "5": "s", "$": "s", "7": "t", "8": "b", "9": "g"
+        "0": "o", "5": "s", "$": "s", "7": "t", "8": "b", "9": "g",
+        "2": "z", "+": "t", "(": "c", "<": "c", "#": "h"
     };
 
-    // Niet-ASCII tekens die toegestaan zijn en als scheiding tellen
-    const SEPARATOR_CHARS = /[\u2018\u2019\u201C\u201D\u2013\u2014\u2026\u20AC]/u;
-    const EMOJI_CHARS = /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u;
+    // Letterachtige tekens die NFKD NIET omzet naar een letter
+    const LETTERLIKE = {
+        "\u2134": "o",   // ℴ script small o
+        "\u2113": "l",   // ℓ script small l
+        "\u212E": "e",   // ℮ estimated symbol
+        "\u2107": "e",   // ℇ euler constant
+        "\u2102": "c",   // ℂ double-struck C
+        "\u2118": "p",   // ℘ weierstrass p
+        "\u210E": "h"    // ℎ planck h
+    };
+
+    // Veilige niet-letter tekens: typografische leestekens, valuta, emoji
+    const SAFE_SYMBOLS =
+        /[\u2018\u2019\u201C\u201D\u2013\u2014\u2026\u20AC]|[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Regional_Indicator}]/u;
 
     /*
      * Zet tekst om naar woorden van a-z.
-     * unknown = true als de tekst een teken bevat dat niet te lezen is
-     * (bijv. ƀ, ŧ, ₴, ß, Cyrillisch). Zulke berichten worden verborgen.
+     * unknown = true als de tekst een letter of symbool bevat dat niet te
+     * lezen is (bijv. ƀ, ŧ, ₴, ß, Cyrillisch, Grieks).
      */
     function analyzeText(text) {
 
@@ -228,8 +251,8 @@
             .normalize("NFKD")
             .toLowerCase()
             .normalize("NFKD")
-            .replace(/\p{M}/gu, "")     // accenten en combinerende tekens
-            .replace(/\p{Cf}/gu, "");   // onzichtbare tekens
+            .replace(/\p{M}/gu, "")      // accenten en combinerende tekens
+            .replace(/\p{Cf}/gu, "");    // onzichtbare tekens
 
         let folded = "";
         let unknown = false;
@@ -240,9 +263,9 @@
                 folded += ch;
             } else if (LEET[ch] !== undefined) {
                 folded += LEET[ch];
-            } else if (ch <= "\x7f") {
-                folded += " ";                  // cijfers, leestekens, spaties
-            } else if (SEPARATOR_CHARS.test(ch) || EMOJI_CHARS.test(ch)) {
+            } else if (LETTERLIKE[ch] !== undefined) {
+                folded += LETTERLIKE[ch];
+            } else if (ch <= "\x7f" || /\s/u.test(ch) || SAFE_SYMBOLS.test(ch)) {
                 folded += " ";
             } else {
                 unknown = true;
@@ -285,14 +308,17 @@
         // Engels
         "fuck", "bastard", "faggot", "fagot", "cocksuck",
 
+        // Seksueel getinte termen (hun gecomprimeerde vorm)
+        "gooning", "gogoon",
+
         // Racistische termen
         "nigger", "nigga", "niga", "ngga", "nagger"
 
     ].map(squashRepeats);
 
     /*
-     * Controleert een lijst woorden op scheldwoorden, ook als ze zijn
-     * opgeknipt ("k u t") of aan elkaar zijn geplakt ("kuttt").
+     * Controleert woorden op scheldwoorden, ook als ze zijn opgeknipt
+     * ("k u t", "f-u-c-k", "k.u.t") of aan elkaar zijn geplakt.
      */
     function profanityIn(tokens) {
 
@@ -305,26 +331,32 @@
             return true;
         }
 
-        // 2. Opgeknipte woorden: tot 4 opeenvolgende fragmenten, max 12 letters
+        // 2. Opgeknipte woorden: 2 tot 5 opeenvolgende fragmenten van max. 3 letters
         for (let i = 0; i < tokens.length; i++) {
 
             let joined = "";
+            let count = 0;
 
-            for (let j = i; j < tokens.length && j < i + 4; j++) {
+            for (let j = i; j < tokens.length && j < i + 5; j++) {
 
-                joined += tokens[j];
-
-                if (joined.length > 12) {
+                if (tokens[j].length > 3) {
                     break;
                 }
 
-                if (PROFANITY_EXACT.has(squashRepeats(joined))) {
+                joined += tokens[j];
+                count++;
+
+                if (joined.length > 14) {
+                    break;
+                }
+
+                if (count >= 2 && PROFANITY_EXACT.has(squashRepeats(joined))) {
                     return true;
                 }
             }
         }
 
-        // 3. Alles aan elkaar
+        // 3. Alles aan elkaar, ook over woordgrenzen heen
         const compact = squashRepeats(tokens.join(""));
 
         return PROFANITY_CONTAINS.some(term => compact.includes(term));
@@ -335,28 +367,28 @@
     }
 
     // ============================================================
-    // EXTRA FILTERS (LOKAAL)
+    // LINKS
     // ============================================================
 
-    // Domeinen met een punt, bijv. "youtube.com" of "https://..."
+    // Domeinen zonder spaties, bijv. "youtube.com", "bit.ly", "t.me"
     const LINK_PATTERN =
-        /(https?:\/\/|www\.|[a-z0-9-]+\s*\.\s*(com|nl|net|org|io|xyz|gg|tv|me|be|co|app|site|ly)\b)/i;
+        /(https?:\/\/|www\.|[a-z0-9-]+\.(com|nl|net|org|io|xyz|gg|tv|me|be|co|app|site|ly|gl|ru|cc|info|biz|online)\b)/i;
 
     // Platformnamen die als link worden gebruikt, ook zonder punt
     const PLATFORMS = new Set([
         "youtube", "youtu", "discord", "twitch", "instagram", "tiktok",
         "snapchat", "telegram", "whatsapp", "facebook", "reddit",
-        "twitter", "onlyfans"
+        "twitter", "onlyfans", "kick"
     ]);
 
-    // Topleveldomeinen en losse "com"/"gg"-achtige woorden
+    // Topleveldomeinen die los als "com" of "nl" worden getypt
     const TLDS = new Set([
         "com", "nl", "net", "org", "io", "xyz", "gg", "tv", "me",
         "be", "co", "app", "site", "ly"
     ]);
 
     /*
-     * True als de tekst een link is of lijkt op een link:
+     * True als de tekst een link is of erop lijkt:
      * - een domein met punt ("youtube.com")
      * - een platformnaam met een tld, slash of @ ("youtube com", "youtube / @naam")
      */
@@ -373,9 +405,8 @@
         }
 
         const { tokens } = analyzeText(raw);
-        const hasPlatform = tokens.some(t => PLATFORMS.has(t));
 
-        if (!hasPlatform) {
+        if (!tokens.some(t => PLATFORMS.has(t))) {
             return false;
         }
 
@@ -385,13 +416,21 @@
         return hasTld || hasLinkSymbol;
     }
 
+    // ============================================================
+    // MODERATIE: LOKALE MELDING
+    // ============================================================
+
     /*
-     * Geeft de melding terug als een bericht verborgen moet worden,
-     * anders null. Scheldwoorden gaan voor de tekencheck.
+     * Geeft de melding terug als het bericht lokaal verborgen moet worden,
+     * anders null. Volgorde: lengte, scheldwoorden, links, onleesbare tekens.
      */
-    function moderationNotice(text) {
+    function lexicalNotice(text) {
 
         const raw = clean(text);
+
+        if (!raw) {
+            return null;
+        }
 
         if (raw.length > CONFIG.maxMessageLength) {
             return HIDDEN_LONG_TEXT;
@@ -407,7 +446,7 @@
             return HIDDEN_LINK_TEXT;
         }
 
-        if (CONFIG.blockForeignScripts && unknown) {
+        if (CONFIG.blockUnreadable && unknown) {
             return HIDDEN_CHARS_TEXT;
         }
 
@@ -415,7 +454,7 @@
     }
 
     // ============================================================
-    // SPAMFILTER (ONTVANGEN BERICHTEN)
+    // SPAMFILTER (LIVE BERICHTEN VAN ANDEREN)
     // ============================================================
 
     function isSpam(message) {
@@ -428,14 +467,13 @@
             return false;
         }
 
-        // Alleen leestekens, bijvoorbeeld "." of "..."
-        if (!/[\p{L}\p{N}]/u.test(text)) {
+        // Alleen leestekens, zonder letters, cijfers of emoji
+        if (!/[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(text)) {
             return true;
         }
 
         const lower = text.toLowerCase();
 
-        // Historie van de laatste minuut; de kortere vensters zitten daarin.
         const history = (recentByUser.get(userId) || [])
             .filter(entry => Math.abs(now - entry.time) < CONFIG.spamMinuteWindowMs);
 
@@ -478,8 +516,8 @@
     }
 
     /*
-     * True als dezelfde afzender binnen het venster al
-     * dezelfde tekst heeft gestuurd, met een ander bericht-id.
+     * True als dezelfde afzender binnen het venster al dezelfde tekst
+     * heeft gestuurd, met een ander bericht-id.
      */
     function isRecentDuplicate(userId, text, time, id) {
 
@@ -582,100 +620,78 @@
     }
 
     /*
-     * Volledige controle bij verzenden: lokaal, daarna extern.
+     * True als de externe dienst het bericht afkeurt. Bij een storing
+     * bepaalt profanityFailClosed of het bericht wordt geblokkeerd.
      */
-    async function isProfane(text) {
-
-        if (!CONFIG.profanityEnabled) {
-            return false;
-        }
-
-        if (CONFIG.profanityLocal && containsProfanityLocal(text)) {
-            return true;
-        }
+    async function externalBlocks(text) {
 
         if (!CONFIG.profanityExternal) {
             return false;
         }
 
-        const external = await checkExternal(text);
+        const result = await checkExternal(text);
 
-        if (external === null) {
+        if (result === null) {
             return CONFIG.profanityFailClosed;
         }
 
-        return external;
+        return result;
+    }
+
+    // ============================================================
+    // BERICHT VOORBEREIDEN (ONTVANGEN / CACHE / HISTORIE)
+    // ============================================================
+
+    function normalizeMessage(input) {
+
+        if (!input || typeof input !== "object") {
+            return null;
+        }
+
+        const normalized = {
+            id: clean(input.id),
+            userId: clean(input.userId),
+            name: clean(input.name || "Leerling"),
+            text: clean(input.text),
+            timestamp: Number(input.timestamp || Date.now())
+        };
+
+        if (!normalized.id || !normalized.text) {
+            return null;
+        }
+
+        return normalized;
     }
 
     /*
-     * Synchrone lokale controle voor binnenkomende berichten.
-     * Bekende berichten worden niet opnieuw beoordeeld.
+     * mode:
+     *   "live"    -> nieuw bericht via PubNub: alle filters, incl. spam
+     *   "history" -> historie van PubNub: alle lokale filters, geen spam
+     *   "cache"   -> lokale cache: lokale filters, stored melding behouden
      */
-    function moderateIncoming(message) {
+    function prepareIncoming(input, mode) {
 
-        if (!message || typeof message !== "object") {
-            return message;
-        }
+        const msg = normalizeMessage(input);
 
-        if (message.id && messageMap.has(message.id)) {
-            return message;
+        if (!msg) {
+            return null;
         }
 
         if (!CONFIG.profanityEnabled) {
-            return message;
+            return { ...msg, notice: null };
         }
 
-        const notice = moderationNotice(message.text);
+        let notice = lexicalNotice(msg.text);
 
-        if (notice) {
-            return { ...message, text: notice };
+        if (!notice && mode === "cache") {
+            notice = input.notice || null;
         }
 
-        // Eigen berichten zijn al gecontroleerd bij het verzenden.
-        if (!isOwnMessage(message) && isSpam(message)) {
-            return { ...message, text: HIDDEN_SPAM_TEXT };
+        if (!notice && mode === "live" && !isOwnMessage(msg) && isSpam(msg)) {
+            notice = HIDDEN_SPAM_TEXT;
         }
 
-        return message;
-    }
-
-    /*
-     * Achtergrondcontrole extern. Het bericht blijft eerst zichtbaar
-     * en wordt verborgen als de dienst het afkeurt.
-     */
-    function hideMessage(id) {
-
-        const existing = messageMap.get(id);
-
-        if (!existing || existing.text === HIDDEN_TEXT) {
-            return;
-        }
-
-        messageMap.set(id, {
-            ...existing,
-            text: HIDDEN_TEXT
-        });
-
-        saveLocalCache();
-        renderAllMessages();
-    }
-
-    function scheduleExternalCheck(message) {
-
-        if (
-            !CONFIG.profanityEnabled ||
-            !CONFIG.profanityExternal ||
-            !message
-        ) {
-            return;
-        }
-
-        checkExternal(message.text).then(flagged => {
-
-            if (flagged === true) {
-                hideMessage(message.id);
-            }
-        });
+        return { ...msg, notice };
     }
 
     // ============================================================
@@ -749,7 +765,10 @@
             }
 
             for (const message of sortByTime([...messages])) {
-                addMessage(moderateIncoming(message), false);
+                const prepared = prepareIncoming(message, "cache");
+                if (prepared) {
+                    addMessage(prepared, false);
+                }
             }
 
             log("Lokale cache geladen:", messages.length, "berichten");
@@ -1290,7 +1309,6 @@
     function handleHistory(data) {
 
         syncRunning = false;
-        historyLoaded = true;
 
         const messages = Array.isArray(data?.messages)
             ? data.messages
@@ -1300,12 +1318,12 @@
 
         const added = [];
 
-        for (const message of sortByTime([...messages])) {
+        for (const raw of sortByTime([...messages])) {
 
-            const moderated = moderateIncoming(message);
+            const prepared = prepareIncoming(raw, "history");
 
-            if (addMessage(moderated, false)) {
-                added.push(moderated);
+            if (prepared && addMessage(prepared, false)) {
+                added.push(prepared);
             }
         }
 
@@ -1356,7 +1374,7 @@
 
     async function sendMessage() {
 
-        if (!channel || !currentUser) {
+        if (!channel || !currentUser || sending) {
             return;
         }
 
@@ -1371,26 +1389,20 @@
             return;
         }
 
-        /*
-         * Lokale controles: lengte, scheldwoorden, links, tekens.
-         */
+        // Lokale controles: lengte, scheldwoorden, links, onleesbare tekens
+        const notice = lexicalNotice(text);
 
-        const sendNotice = moderationNotice(text);
-
-        if (sendNotice) {
+        if (notice) {
             setStatus(
                 "Bericht niet verstuurd: " +
-                sendNotice.replace("⚠️ Bericht verborgen ", "")
+                notice.replace("⚠️ Bericht verborgen ", "")
             );
             return;
         }
 
         const now = Date.now();
 
-        /*
-         * Cooldown tussen verzonden berichten.
-         */
-
+        // Cooldown tussen verzonden berichten
         const sinceLast = now - lastSentAt;
 
         if (sinceLast < CONFIG.sendCooldownMs) {
@@ -1403,100 +1415,89 @@
             return;
         }
 
-        /*
-         * Duplicaat: dezelfde tekst binnen 2 minuten.
-         */
-
+        // Duplicaat: dezelfde tekst binnen 2 minuten
         if (isRecentDuplicate(currentUser.id, text, now, "")) {
             setStatus("Dit bericht is al binnen 2 minuten verstuurd");
             return;
         }
 
-        setStatus("Controleren...");
-
-        if (await isProfane(text)) {
-            setStatus("Bericht bevat ongepast taalgebruik");
-            return;
-        }
-
+        sending = true;
         sendButton.disabled = true;
 
-        const message = {
-            id: crypto.randomUUID(),
-            userId: String(currentUser.id),
-            name: String(currentUser.name),
-            text: text,
-            timestamp: now
-        };
+        try {
 
-        addMessage(message, true);
-        saveLocalCache();
+            setStatus("Controleren...");
 
-        messageInput.value = "";
-        autoResizeInput();
-
-        lastSentAt = now;
-
-        window.postMessage({
-            source: "SOMTODAY_PUBNUB_USERSCRIPT",
-            type: "PUBLISH",
-            data: {
-                channel: String(channel),
-                message: message
-            }
-        }, "*");
-
-        setStatus("Verbonden");
-
-        setTimeout(() => {
-
-            if (sendButton) {
-                sendButton.disabled = false;
+            // Externe controle
+            if (CONFIG.profanityEnabled && await externalBlocks(text)) {
+                setStatus("Bericht bevat ongepast taalgebruik");
+                return;
             }
 
-        }, 250);
+            const message = {
+                id: crypto.randomUUID(),
+                userId: String(currentUser.id),
+                name: String(currentUser.name),
+                text: text,
+                timestamp: now,
+                notice: null
+            };
+
+            addMessage(message, true);
+            saveLocalCache();
+
+            messageInput.value = "";
+            autoResizeInput();
+
+            lastSentAt = now;
+
+            window.postMessage({
+                source: "SOMTODAY_PUBNUB_USERSCRIPT",
+                type: "PUBLISH",
+                data: {
+                    channel: String(channel),
+                    message: {
+                        id: message.id,
+                        userId: message.userId,
+                        name: message.name,
+                        text: message.text,
+                        timestamp: message.timestamp
+                    }
+                }
+            }, "*");
+
+            setStatus("Verbonden");
+
+        } finally {
+
+            setTimeout(() => {
+
+                sending = false;
+
+                if (sendButton) {
+                    sendButton.disabled = false;
+                }
+
+            }, 250);
+        }
     }
 
     // ============================================================
     // MESSAGE STORE
     // ============================================================
 
-    function normalizeMessage(message) {
-
-        if (!message || typeof message !== "object") {
-            return null;
-        }
-
-        const normalized = {
-            id: clean(message.id),
-            userId: clean(message.userId),
-            name: clean(message.name || "Leerling"),
-            text: clean(message.text),
-            timestamp: Number(message.timestamp || Date.now())
-        };
-
-        if (!normalized.id || !normalized.text) {
-            return null;
-        }
-
-        return normalized;
-    }
-
     /*
      * Voegt een bericht toe. Geeft false terug bij:
-     * - ongeldig bericht
      * - bekend bericht-id
      * - duplicaat binnen het 2-minutenvenster
      */
     function addMessage(message, render = true) {
 
-        const normalized = normalizeMessage(message);
-
-        if (!normalized) {
+        if (!message || !message.id) {
             return false;
         }
 
-        if (messageMap.has(normalized.id)) {
+        if (messageMap.has(message.id)) {
             return false;
         }
 
@@ -1504,17 +1505,17 @@
 
         if (
             isRecentDuplicate(
-                normalized.userId,
-                normalized.text,
-                normalized.timestamp,
-                normalized.id
+                message.userId,
+                message.text,
+                message.timestamp,
+                message.id
             )
         ) {
             return false;
         }
 
-        messageMap.set(normalized.id, normalized);
-        rememberText(normalized);
+        messageMap.set(message.id, message);
+        rememberText(message);
 
         if (messageMap.size > CONFIG.maxMessages) {
 
@@ -1537,20 +1538,62 @@
         return true;
     }
 
-    function handleIncomingMessage(message) {
+    function handleIncomingMessage(raw) {
 
-        const moderated = moderateIncoming(message);
+        const prepared = prepareIncoming(raw, "live");
 
-        const added = addMessage(moderated, false);
+        if (!prepared) {
+            return;
+        }
 
-        if (!added) {
+        if (!addMessage(prepared, false)) {
             return;
         }
 
         saveLocalCache();
         renderAllMessages();
 
-        scheduleExternalCheck(moderated);
+        scheduleExternalCheck(prepared);
+    }
+
+    /*
+     * Achtergrondcontrole extern. Het bericht blijft eerst zichtbaar
+     * en wordt verborgen als de dienst het afkeurt.
+     */
+    function hideMessage(id) {
+
+        const existing = messageMap.get(id);
+
+        if (!existing || existing.notice) {
+            return;
+        }
+
+        messageMap.set(id, {
+            ...existing,
+            notice: HIDDEN_TEXT
+        });
+
+        saveLocalCache();
+        renderAllMessages();
+    }
+
+    function scheduleExternalCheck(message) {
+
+        if (
+            !CONFIG.profanityEnabled ||
+            !CONFIG.profanityExternal ||
+            !message ||
+            message.notice
+        ) {
+            return;
+        }
+
+        checkExternal(message.text).then(flagged => {
+
+            if (flagged === true) {
+                hideMessage(message.id);
+            }
+        });
     }
 
     // ============================================================
@@ -1607,7 +1650,13 @@
         const bubble = document.createElement("div");
 
         bubble.className = "somtoday-chat-bubble";
-        bubble.textContent = message.text;
+
+        if (message.notice) {
+            bubble.classList.add("hidden-notice");
+            bubble.textContent = message.notice;
+        } else {
+            bubble.textContent = message.text;
+        }
 
         const time = document.createElement("div");
 
@@ -1783,6 +1832,10 @@
                 line-height: 20px;
                 white-space: pre-wrap;
                 overflow-wrap: anywhere;
+            }
+            .somtoday-chat-bubble.hidden-notice {
+                font-style: italic;
+                opacity: .75;
             }
             .somtoday-chat-message.mine .somtoday-chat-bubble {
                 background: var(--action-primary-normal, #3565d4);
