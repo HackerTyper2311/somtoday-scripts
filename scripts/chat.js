@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.9.0
+     * Versie: 2.9.1
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.9.0",
+        version: "2.9.1",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -74,10 +74,6 @@
     const HIDDEN_LONG_TEXT = "⚠️ Bericht verborgen (te lang)";
     const HIDDEN_LINK_TEXT = "⚠️ Bericht verborgen (link)";
     const HIDDEN_CHARS_TEXT = "⚠️ Bericht verborgen (onleesbare tekens)";
-
-    function isHiddenText(text) {
-        return String(text || "").startsWith("⚠️ Bericht verborgen");
-    }
 
     // ============================================================
     // STATE
@@ -207,73 +203,79 @@
     }
 
     /*
-     * Lookalike-tekens die na normalisatie naar kleine letters
-     * worden omgezet. Alle sleutels moeten kleine letters zijn.
+     * Lookalike-tekens die naar a-z worden omgezet. Sleutels: kleine letters.
+     * Alles wat na folding geen a-z is, telt als scheidingsteken.
      */
     const CONFUSABLES = {
-
         // Cyrillisch
-        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
-        "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
-        "к": "k", "н": "h", "т": "t", "м": "m", "в": "b",
-        "ԁ": "d", "ԛ": "q", "ԝ": "w", "п": "n", "ц": "u",
-
-        // Overig Latijns
-        "ą": "a", "ƒ": "f", "մ": "u", "ç": "c", "ʂ": "s",
-        "ҟ": "k", "ɑ": "a", "ı": "i", "ɩ": "i", "ƭ": "t",
-        "ɱ": "m", "ø": "o", "ɏ": "y", "ʉ": "u", "ł": "l",
-        "ⱨ": "h",
-
-        // Valutasymbolen en andere tekens die op letters lijken
-        "฿": "b", "₮": "t", "₵": "c", "₴": "s", "₭": "k",
-        "₥": "m", "₣": "f", "₳": "a",
-
+        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+        "і": "i", "ј": "j", "ѕ": "s", "к": "k", "н": "h", "т": "t", "м": "m",
+        "в": "b", "ԁ": "d", "ԛ": "q", "ԝ": "w", "п": "n", "ц": "u", "ҽ": "e",
+        "һ": "h", "ӏ": "l", "ѵ": "v", "ү": "y", "ѡ": "w",
         // Grieks
-        "λ": "a", "σ": "e", "δ": "d", "π": "n",
-
+        "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
+        "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "γ": "y", "η": "n", "μ": "u",
+        "λ": "a", "σ": "e", "δ": "d", "π": "n", "ω": "w",
+        // Latijnse varianten en IPA
+        "ą": "a", "ƒ": "f", "ɑ": "a", "ı": "i", "ɩ": "i", "ƭ": "t", "ɱ": "m",
+        "ø": "o", "ɏ": "y", "ʉ": "u", "ł": "l", "ⱨ": "h", "ʂ": "s", "ҟ": "k",
+        "ç": "c", "ɡ": "g", "ɾ": "r", "ʋ": "v", "ʍ": "w", "ɣ": "y", "ǝ": "e",
+        "ß": "ss", "æ": "ae", "œ": "oe", "ð": "d", "þ": "th",
+        // Valutasymbolen
+        "฿": "b", "₮": "t", "₵": "c", "₴": "s", "₭": "k", "₥": "m", "₣": "f", "₳": "a",
         // Canadees Syllabisch
-        "ᔕ": "s", "ᑌ": "u", "ᑕ": "c", "ᗰ": "m", "ᗩ": "a",
-        "ᗴ": "e", "ᗝ": "o", "ᑭ": "p", "ᖇ": "r", "ᒪ": "l",
-        "ᐯ": "v", "ᖴ": "f", "ᕼ": "h", "ᑎ": "n", "ᗷ": "b",
-        "ᔓ": "s", "ᒍ": "j", "ᘿ": "g"
+        "ᗩ": "a", "ᗷ": "b", "ᑕ": "c", "ᗪ": "d", "ᗴ": "e", "ᖴ": "f", "ᘜ": "g",
+        "ᕼ": "h", "ᐁ": "i", "ᒍ": "j", "ᖽ": "k", "ᒪ": "l", "ᗰ": "m", "ᑎ": "n",
+        "ᗝ": "o", "ᑭ": "p", "ᑫ": "q", "ᖇ": "r", "ᔕ": "s", "ᖶ": "t", "ᑌ": "u",
+        "ᐯ": "v", "ᗯ": "w", "᙭": "x", "ᖻ": "y", "ᘔ": "z"
+    };
+
+    // Leetspeak-cijfers en symbolen
+    const LEET = {
+        "@": "a", "4": "a", "3": "e", "1": "i", "!": "i", "|": "i",
+        "0": "o", "5": "s", "$": "s", "7": "t", "8": "b", "9": "g"
     };
 
     /*
-     * Zet een tekst om naar kleine letters a-z.
-     * Scheidingstekens worden spaties, zodat "f.u.c.k" en
-     * "f-u-c-k" hetzelfde worden als "fuck".
+     * Zet tekst om naar een lijst woorden van kleine letters a-z.
+     * Onzichtbare tekens en accenten worden verwijderd, lookalikes en
+     * leetspeak worden omgezet, en al het overige telt als scheiding.
      */
     function foldText(text) {
 
-        let folded = clean(text)
-            .normalize("NFKC")
-            .toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replace(/[\u00ad\u200b-\u200f\u2060-\u206f\ufeff]/g, "")
-            .replace(/ß/g, "ss");
+        const base = clean(text)
+            .normalize("NFKD")                      // ligaturen, volle breedte, stijlletters
+            .replace(/\p{M}/gu, "")                 // accenten en combinerende tekens
+            .replace(/\p{Cf}/gu, "")                // onzichtbare tekens (zero-width, variation selectors, tags)
+            .toLowerCase();
 
-        folded = Array.from(folded)
-            .map(ch => CONFUSABLES[ch] || ch)
-            .join("");
+        let out = "";
 
-        return folded
-            .replace(/@/g, "a")
-            .replace(/4/g, "a")
-            .replace(/3/g, "e")
-            .replace(/[1!|]/g, "i")
-            .replace(/0/g, "o")
-            .replace(/[5$]/g, "s")
-            .replace(/7/g, "t")
-            .replace(/[^a-z]+/g, " ")
-            .trim();
+        for (const ch of base) {
+
+            if (CONFUSABLES[ch] !== undefined) {
+                out += CONFUSABLES[ch];
+            } else if (LEET[ch] !== undefined) {
+                out += LEET[ch];
+            } else if (ch >= "a" && ch <= "z") {
+                out += ch;
+            } else {
+                out += " ";
+            }
+        }
+
+        return out.split(" ").filter(Boolean);
     }
 
+    /*
+     * Exacte woorden. Korte woorden staan hier, niet in de substring-lijst,
+     * zodat "hoera" en "kutje" niet worden geblokkeerd.
+     */
     const PROFANITY_EXACT = new Set([
 
         // Nederlands
         "kut", "lul", "hoer", "fok", "fuk", "shi", "gvd", "kkr",
-        "piemel", "dick", "dik", "dih", "cuck", "cock", "fag","vagina","h......o....er",
+        "piemel", "dick", "dik", "dih", "cuck", "cock", "fag", "vagina",
 
         // Engels
         "fck", "fk", "fuck", "shit", "bitch", "suck",
@@ -281,51 +283,66 @@
         // Seksueel getinte termen
         "goon", "gooner", "gooning", "sperma", "sperm",
 
-        // Racistische termen en fragmenten
-        "neger", "nigga", "niga", "nigger", "nagger",
-        "nija", "ninja", "ngger", "ngr", "negr"
+        // Racistische termen
+        "neger", "nigga", "niga", "nigger", "nagger", "ngger", "ngr", "negr"
 
     ].map(squashRepeats));
 
+    /*
+     * Substring-matches. Alleen lange, herkenbare termen.
+     */
     const PROFANITY_CONTAINS = [
 
         // Nederlands
         "klootzak", "kanker", "godverdomme", "godver",
         "scheiss", "scheisse", "schiesse", "sheisse",
-        "schijt", "flikker", "mongool", "balzak", "piemel",
-        "neger", "negr",
+        "schijt", "flikker", "mongool", "balzak", "piemel", "neger",
 
         // Engels
         "fuck", "bastard", "faggot", "fagot", "cocksuck",
 
         // Racistische termen
         "nigger", "nigga", "niga", "ngga", "nagger"
-    ];
+
+    ].map(squashRepeats);
 
     function containsProfanityLocal(text) {
 
-        const folded = foldText(text);
+        const tokens = foldText(text);
 
-        if (!folded) {
+        if (!tokens.length) {
             return false;
         }
 
-        const words = folded
-            .split(" ")
-            .filter(Boolean);
-
-        if (words.some(word => PROFANITY_EXACT.has(squashRepeats(word)))) {
+        // 1. Losse woorden
+        if (tokens.some(t => PROFANITY_EXACT.has(squashRepeats(t)))) {
             return true;
         }
 
-        const compactRaw = words.join("");
-        const compactSquashed = squashRepeats(compactRaw);
+        // 2. Woorden die zijn opgeknipt: "k u t", "fu ck", "f-u-c-k"
+        //    Opeenvolgende fragmenten van max. 2 letters worden samengevoegd.
+        for (let i = 0; i < tokens.length; i++) {
 
-        return PROFANITY_CONTAINS.some(
-            term =>
-                compactRaw.includes(term) ||
-                compactSquashed.includes(term)
-        );
+            let joined = "";
+
+            for (let j = i; j < tokens.length && j < i + 4; j++) {
+
+                if (tokens[j].length > 2) {
+                    break;
+                }
+
+                joined += tokens[j];
+
+                if (PROFANITY_EXACT.has(squashRepeats(joined))) {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Alles aan elkaar, ook over woordgrenzen heen
+        const compact = squashRepeats(tokens.join(""));
+
+        return PROFANITY_CONTAINS.some(term => compact.includes(term));
     }
 
     // ============================================================
@@ -588,14 +605,11 @@
             return message;
         }
 
-        if (isHiddenText(message.text)) {
-            return message;
-        }
-
         if (!CONFIG.profanityEnabled) {
             return message;
         }
 
+        // Elk bericht wordt gecontroleerd, ook als de tekst op een melding lijkt.
         const notice = moderationNotice(message.text);
 
         if (notice) {
@@ -617,7 +631,7 @@
 
         const existing = messageMap.get(id);
 
-        if (!existing || isHiddenText(existing.text)) {
+        if (!existing || existing.text === HIDDEN_TEXT) {
             return;
         }
 
@@ -635,8 +649,7 @@
         if (
             !CONFIG.profanityEnabled ||
             !CONFIG.profanityExternal ||
-            !message ||
-            isHiddenText(message.text)
+            !message
         ) {
             return;
         }
