@@ -51,11 +51,11 @@
         profanityFailClosed: true,  // true = blokkeren als externe check faalt
 
         // Spamfilter
-        spamWindowMs: 10000,
-        spamMaxPerWindow: 10,
-        spamMaxSame: 5,
+        spamWindowMs: 5000,
+        spamMaxPerWindow: 20,
+        spamMaxSame: 10,
         spamMinuteWindowMs: 60 * 1000,
-        spamMaxPerMinute: 25,
+        spamMaxPerMinute: 50,
 
         // Extra filters
         maxMessageLength: 300,       // langere berichten worden verborgen
