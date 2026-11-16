@@ -21,6 +21,7 @@ function init() {
      scroll visibly through them). They get the same viewport-fixed gradient,
      so they blend seamlessly with the page background. */
   var STYLE_ID = 'rooster-bg-gradient-style';
+  var GLASS_ID = 'rooster-bg-glass';
   var GRADIENT_SELECTORS = [
     'sl-header', 'sl-tab-bar', 'sl-dagen-header', '.headers-container',
     '.navigation', '.dagen', 'sl-rooster-tijden', '.vakanties',
@@ -61,6 +62,8 @@ function init() {
     h.backgroundSize = '';
     h.backgroundPosition = '';
     activeImage = null;
+    var glass = document.getElementById(GLASS_ID);
+    if (glass) glass.remove();
     var st = document.getElementById(STYLE_ID);
     if (st) st.remove();
     activeMid = null;
@@ -133,30 +136,57 @@ function init() {
   /* Covers the top bar (~80px) and the week navigation + day headers (down to ~285px). */
   var TOP_BAND_HEIGHT = '285px';
 
-  function injectBarBlurStyle(dataUrl) {
+  function injectBarBlurStyle() {
     var st = document.getElementById(STYLE_ID);
     if (!st) {
       st = document.createElement('style');
       st.id = STYLE_ID;
       (document.head || document.documentElement).appendChild(st);
     }
-    /* The band is a blurred copy of the image itself (filter on the band's own
-       content), so it does not depend on backdrop-filter, which the page's
-       stacking context can block. The band is pinned to the viewport like the
-       page background, so the blurred image lines up with the sharp one. */
-    var pad = 40;
+    /* The bars and day row become transparent; the glass layer below provides the look. */
+    var TASK_BOXES = ['sl-rooster-huiswerk-stack .card', 'sl-rooster-huiswerk-stack .container', '.stacks'];
     st.textContent =
-      GRADIENT_SELECTORS.join(',') + ',' + BAR_HOSTS.join(',') +
+      GRADIENT_SELECTORS.concat(TASK_BOXES).join(',') + ',' + BAR_HOSTS.join(',') +
       '{background-color:transparent !important;background-image:none !important;' +
       'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}' +
       BAR_HOSTS.join(',') + ' *{background-color:transparent !important;background-image:none !important;}' +
-      'html::before{content:"";position:fixed;left:-' + pad + 'px;right:-' + pad +
-      'px;top:-' + pad + 'px;height:calc(' + TOP_BAND_HEIGHT + ' + ' + pad + 'px);' +
-      'z-index:-1;pointer-events:none;' +
-      'background-image:linear-gradient(rgba(24,28,32,.22),rgba(24,28,32,.22)),url("' + dataUrl + '");' +
-      'background-size:cover;background-position:center;background-attachment:fixed;' +
-      'filter:blur(20px) saturate(1.2);}';
+      /* Text and icons: white, blended with difference so they show the inverse of the background behind them. */
+      'sl-header,sl-header *,.headers-container,.headers-container *{color:#fff !important;fill:#fff !important;}' +
+      'sl-header,.headers-container{mix-blend-mode:difference !important;}';
     flattenShadowBars();
+    injectGlass();
+  }
+
+  /* A fixed, full-width frosted layer. It sits above the lessons (z 8) so it
+     blurs whatever scrolls underneath, and below the header (z 10) and day
+     row (z 12) so their text stays sharp. pointer-events:none keeps it
+     from blocking clicks. */
+  /* Bottom of the week header (navigation + day row + vakantie strip), so the
+     blur stops exactly where that block ends. Falls back to the fixed height. */
+  function glassHeight() {
+    var h = document.querySelector('.headers-container');
+    if (!h) return TOP_BAND_HEIGHT;
+    var bottom = h.getBoundingClientRect().bottom;
+    return (bottom > 0 ? Math.round(bottom) : parseInt(TOP_BAND_HEIGHT, 10)) + 'px';
+  }
+
+  function updateGlassHeight() {
+    var g = document.getElementById(GLASS_ID);
+    if (g) g.style.height = glassHeight();
+  }
+
+  function injectGlass() {
+    var g = document.getElementById(GLASS_ID);
+    if (!g) {
+      g = document.createElement('div');
+      g.id = GLASS_ID;
+      (document.body || document.documentElement).appendChild(g);
+    }
+    var blur = 'blur(20px) saturate(1.2)';
+    g.style.cssText =
+      'position:fixed;left:0;right:0;top:0;height:' + glassHeight() + ';' +
+      'z-index:8;pointer-events:none;background-color:rgba(24,28,32,.22);' +
+      '-webkit-backdrop-filter:' + blur + ';backdrop-filter:' + blur + ';';
   }
 
   /* Custom-element bars can keep a background inside their shadow root. */
@@ -189,7 +219,7 @@ function init() {
     s.backgroundPosition = 'center';
     s.backgroundAttachment = 'fixed';
     if (document.body) document.body.style.backgroundColor = 'transparent';
-    injectBarBlurStyle(dataUrl);
+    injectBarBlurStyle();
     activeMid = mid;
     mode = 'image';
     activeColor = null;
@@ -237,8 +267,12 @@ function init() {
 
   /* shadow-root bars can mount late: keep their flat style in place */
   setInterval(function () {
-    if (mode === 'image') flattenShadowBars();
-  }, 2000);
+    if (mode === 'image') {
+      flattenShadowBars();
+      updateGlassHeight();
+    }
+  }, 300);
+  window.addEventListener('resize', updateGlassHeight);
 
   window.addEventListener('load', reapply);
   setTimeout(reapply, 1500);
