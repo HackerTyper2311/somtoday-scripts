@@ -1,4 +1,3 @@
-
 (function () {
   'use strict';
 
@@ -120,7 +119,14 @@
   }
 
   /* ---------- folder listing ---------- */
-  function getListing(cache) {
+  /* Fallback source: jsDelivr serves the same repo without the GitHub API
+     rate limit (60 unauthenticated requests per hour). */
+  var JSDELIVR_PKG = 'https://data.jsdelivr.com/v1/packages/gh/' +
+    OWNER + '/' + REPO + '@' + BRANCH + '?structure=flat';
+  var JSDELIVR_CDN = 'https://cdn.jsdelivr.net/gh/' +
+    OWNER + '/' + REPO + '@' + BRANCH + '/' + FOLDER + '/';
+
+  function listFromGitHub(cache) {
     var headers = {
       Accept: 'application/vnd.github+json'
     };
@@ -155,20 +161,60 @@
       saveCache(cache);
 
       return cache.listing;
-    }).catch(function (err) {
-      if (cache.listing) {
-        warn('Could not check for updates; using cached scripts:', err.message);
+    });
+  }
 
-        toast(
-          'Somtoday Loader: update check failed (' +
-          err.message +
-          '). Using cached scripts.'
-        );
+  function listFromJsDelivr() {
+    return request(JSDELIVR_PKG, { Accept: 'application/json' }).then(function (r) {
+      var data = JSON.parse(r.text);
 
-        return cache.listing;
+      if (!data || !Array.isArray(data.files)) {
+        throw new Error('Unexpected jsDelivr response');
       }
 
-      throw err;
+      var prefix = '/' + FOLDER + '/';
+
+      return data.files
+        .filter(function (f) {
+          return typeof f.name === 'string' &&
+            f.name.indexOf(prefix) === 0 &&
+            f.name.indexOf('/', prefix.length) === -1 &&
+            /\.js$/i.test(f.name);
+        })
+        .map(function (f) {
+          /* sha is only a cache key here; prefix it so a switch of source re-downloads */
+          return { name: f.name.slice(prefix.length), sha: 'jsd:' + (f.hash || f.time) };
+        })
+        .sort(function (a, b) {
+          return a.name.localeCompare(b.name);
+        });
+    });
+  }
+
+  function getListing(cache) {
+    return listFromGitHub(cache).catch(function (err) {
+      warn('GitHub listing failed (' + err.message + '); trying jsDelivr.');
+
+      return listFromJsDelivr().then(function (list) {
+        cache.listing = list;
+        cache.etag = null;
+        saveCache(cache);
+        return list;
+      }, function (err2) {
+        if (cache.listing) {
+          warn('Could not check for updates; using cached scripts:', err2.message);
+
+          toast(
+            'Somtoday Loader: update check failed (' +
+            err2.message +
+            '). Using cached scripts.'
+          );
+
+          return cache.listing;
+        }
+
+        throw err2;
+      });
     });
   }
 
@@ -185,8 +231,13 @@
       encodeURIComponent(file.name) +
       '?ref=' + encodeURIComponent(BRANCH);
 
+    var cdnUrl = JSDELIVR_CDN + encodeURIComponent(file.name);
+
     return request(url, {
       Accept: 'application/vnd.github.raw+json'
+    }).catch(function (err) {
+      warn('GitHub download failed (' + err.message + '); trying jsDelivr.');
+      return request(cdnUrl, {});
     }).then(function (r) {
       cache.files[file.name] = {
         sha: file.sha,
