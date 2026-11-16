@@ -37,6 +37,8 @@ function init() {
   var activeColor = null;   /* solid mode */
   var activeGradient = null; /* gradient mode: { stops: [...], angle: n } */
   var lastSolid = null;
+  var IMAGE_KEY = 'rooster-bg-image';
+  var activeImage = null;     /* image mode: data URL */
 
   /* ============================================================
    * 1. STATE / APPLY
@@ -55,12 +57,15 @@ function init() {
     var h = document.documentElement.style;
     h.backgroundImage = '';
     h.backgroundAttachment = '';
+    h.backgroundSize = '';
+    h.backgroundPosition = '';
+    activeImage = null;
     var st = document.getElementById(STYLE_ID);
     if (st) st.remove();
     activeMid = null;
   }
 
-  function injectGradientStyle(css, mid) {
+  function injectGradientStyle(css, mid, extra) {
     var st = document.getElementById(STYLE_ID);
     if (!st) {
       st = document.createElement('style');
@@ -70,7 +75,7 @@ function init() {
     st.textContent = GRADIENT_SELECTORS.join(',') +
       '{background-color:' + mid + ' !important;' +
       'background-image:' + css + ' !important;' +
-      'background-attachment:fixed !important;}';
+      'background-attachment:fixed !important;' + (extra || '') + '}';
   }
 
   function setBg(color, save) {
@@ -83,7 +88,7 @@ function init() {
     activeColor = color;
     activeGradient = null;
     lastSolid = color;
-    if (save) { store(STORAGE_KEY, color); store(GRADIENT_KEY, null); }
+    if (save) { store(STORAGE_KEY, color); store(GRADIENT_KEY, null); store(IMAGE_KEY, null); }
     updateActiveRing();
   }
 
@@ -117,7 +122,30 @@ function init() {
     mode = 'gradient';
     activeColor = null;
     activeGradient = { stops: g.stops.slice(), angle: g.angle };
-    if (save) { store(GRADIENT_KEY, JSON.stringify(activeGradient)); store(STORAGE_KEY, null); }
+    if (save) { store(GRADIENT_KEY, JSON.stringify(activeGradient)); store(STORAGE_KEY, null); store(IMAGE_KEY, null); }
+    updateActiveRing();
+  }
+
+  function setImage(dataUrl, save) {
+    clearGradientStyles();
+    var s = document.documentElement.style;
+    var mid = '#181c20';
+    RESET_VARS.forEach(function (v) { s.setProperty(v, mid); });
+    var css = 'url("' + dataUrl + '")';
+    s.backgroundColor = mid;
+    s.backgroundImage = css;
+    s.backgroundSize = 'cover';
+    s.backgroundPosition = 'center';
+    s.backgroundAttachment = 'fixed';
+    if (document.body) document.body.style.backgroundColor = 'transparent';
+    injectGradientStyle(css, mid,
+      'background-size:cover !important;background-position:center !important;');
+    activeMid = mid;
+    mode = 'image';
+    activeColor = null;
+    activeGradient = null;
+    activeImage = dataUrl;
+    if (save) { store(IMAGE_KEY, dataUrl); store(STORAGE_KEY, null); store(GRADIENT_KEY, null); }
     updateActiveRing();
   }
 
@@ -132,6 +160,7 @@ function init() {
     activeGradient = null;
     store(STORAGE_KEY, null);
     store(GRADIENT_KEY, null);
+    store(IMAGE_KEY, null);
     updateActiveRing();
   }
   window.__somtodayBgReset = reset; /* handy from the console */
@@ -139,10 +168,13 @@ function init() {
   function reapply() {
     if (mode === 'solid') setBg(activeColor, false);
     else if (mode === 'gradient') setGradient(activeGradient, false);
+    else if (mode === 'image' && activeImage) setImage(activeImage, false);
   }
 
   /* restore saved state */
   (function () {
+    var img = load(IMAGE_KEY);
+    if (img) { setImage(img, false); return; }
     var g = null;
     try { g = JSON.parse(load(GRADIENT_KEY)); } catch (e) {}
     if (g && g.stops && g.stops.length >= 2 && typeof g.angle === 'number') {
@@ -160,7 +192,7 @@ function init() {
   /* Somtoday (Angular) rewrites the style attribute on theme changes: re-apply */
   new MutationObserver(function () {
     if (mode === 'none') return;
-    var expected = mode === 'gradient' ? activeMid : activeColor;
+    var expected = (mode === 'gradient' || mode === 'image') ? activeMid : activeColor;
     var s = document.documentElement.style;
     if (s.getPropertyValue('--bg-neutral-none').trim() !== expected) reapply();
   }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
@@ -547,15 +579,127 @@ function init() {
    * ============================================================ */
   var TAB_ID = 'bg-customization';
 
+  /* ---------- image upload ---------- */
+  var IMAGE_MAX_CHARS = 4500000; /* keep well under localStorage's ~5 MB quota */
+
+  function compressImage(file, maxSide, quality) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('Kon het bestand niet lezen.')); };
+      reader.onload = function () {
+        var img = new Image();
+        img.onerror = function () { reject(new Error('Dit is geen geldige afbeelding.')); };
+        img.onload = function () {
+          var w = img.naturalWidth, h = img.naturalHeight;
+          var scale = Math.min(1, maxSide / Math.max(w, h));
+          var c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(w * scale));
+          c.height = Math.max(1, Math.round(h * scale));
+          var ctx = c.getContext('2d');
+          ctx.fillStyle = '#181c20';   /* flatten transparency onto a dark base */
+          ctx.fillRect(0, 0, c.width, c.height);
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', quality));
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function handleUpload(file) {
+    /* Try a good quality first, then smaller/lower quality if storage would be too full */
+    var attempts = [[1920, 0.85], [1280, 0.75], [960, 0.6]];
+    var step = 0;
+
+    function next() {
+      var a = attempts[step++];
+      if (!a) return Promise.reject(new Error('Afbeelding is te groot om op te slaan.'));
+      return compressImage(file, a[0], a[1]).then(function (data) {
+        if (data.length > IMAGE_MAX_CHARS) return next();
+        return data;
+      });
+    }
+
+    return next().then(function (data) {
+      setImage(data, true);
+      if (load(IMAGE_KEY) !== data) {
+        throw new Error('Opslaan lukt niet (opslagruimte vol?).');
+      }
+    });
+  }
+
+  function buildImageSection(refresh) {
+    var box = el('div', {
+      display: 'flex', flexDirection: 'column', gap: '10px',
+      padding: '16px 24px 0', boxSizing: 'border-box', width: '100%',
+      borderTop: '1px solid var(--border-neutral-weak, #e5e5e5)', marginTop: '8px'
+    });
+
+    box.appendChild(el('div', { fontWeight: '600', fontSize: '15px' }, 'Eigen afbeelding'));
+
+    var preview = el('div', {
+      height: '90px', borderRadius: '10px', width: '100%',
+      border: '1px solid rgba(128,128,128,.5)',
+      backgroundSize: 'cover', backgroundPosition: 'center',
+      backgroundColor: 'rgba(128,128,128,.15)',
+      backgroundImage: activeImage ? 'url("' + activeImage + '")' : 'none'
+    });
+    box.appendChild(preview);
+
+    var status = el('div', { fontSize: '13px', minHeight: '18px',
+      color: 'var(--fg-neutral-moderate, #666)' }, '');
+    var input = el('input', { display: 'none' });
+    input.type = 'file';
+    input.accept = 'image/*';
+
+    var row = el('div', { display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' });
+    var uploadBtn = smallBtn('Afbeelding uploaden');
+    var removeBtn = smallBtn('Afbeelding verwijderen');
+    removeBtn.disabled = !activeImage;
+    if (!activeImage) removeBtn.style.opacity = '.5';
+    row.appendChild(uploadBtn);
+    row.appendChild(removeBtn);
+
+    uploadBtn.addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      input.value = '';
+      if (!file) return;
+      if (!/^image\//.test(file.type)) { status.textContent = 'Kies een afbeeldingsbestand.'; return; }
+      status.textContent = 'Bezig met laden…';
+      handleUpload(file).then(function () {
+        status.textContent = '';
+        refresh();
+      }, function (err) {
+        status.textContent = err.message || 'Uploaden mislukt.';
+      });
+    });
+    removeBtn.addEventListener('click', function () {
+      reset();
+      refresh();
+    });
+
+    box.appendChild(input);
+    box.appendChild(row);
+    box.appendChild(status);
+    return box;
+  }
+
   function renderTab(panel) {
+    panel.textContent = '';
+
     panel.appendChild(el('div', {
       padding: '8px 24px 12px', fontSize: '13px', lineHeight: '18px',
       color: 'var(--fg-neutral-moderate, #666)'
-    }, 'Kies een achtergrondkleur of verloop voor Somtoday.'));
+    }, 'Kies een achtergrondkleur, verloop of eigen afbeelding voor Somtoday.'));
 
     var body = buildSettingsRow();
     body.style.padding = '6px 24px 16px';
     panel.appendChild(body);
+
+    /* Re-render the tab after an upload/removal so the preview and buttons update */
+    panel.appendChild(buildImageSection(function () { renderTab(panel); }));
     updateActiveRing();
   }
 
