@@ -135,8 +135,8 @@ function init() {
       st.id = STYLE_ID;
       (document.head || document.documentElement).appendChild(st);
     }
-    var glass = 'rgba(24,28,32,.6)';
-    var blur = 'blur(16px) saturate(1.3)';
+    var glass = 'rgba(24,28,32,.22)';
+    var blur = 'blur(20px) saturate(1.2)';
     st.textContent = GRADIENT_SELECTORS.join(',') +
       '{background-color:' + glass + ' !important;' +
       'background-image:none !important;' +
