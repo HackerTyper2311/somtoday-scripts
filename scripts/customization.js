@@ -126,6 +126,24 @@ function init() {
     updateActiveRing();
   }
 
+  /* In image mode the toolbars/sticky bars become frosted glass: a tinted,
+     translucent layer that blurs whatever image sits behind them. */
+  function injectBarBlurStyle() {
+    var st = document.getElementById(STYLE_ID);
+    if (!st) {
+      st = document.createElement('style');
+      st.id = STYLE_ID;
+      (document.head || document.documentElement).appendChild(st);
+    }
+    var glass = 'rgba(24,28,32,.6)';
+    var blur = 'blur(16px) saturate(1.3)';
+    st.textContent = GRADIENT_SELECTORS.join(',') +
+      '{background-color:' + glass + ' !important;' +
+      'background-image:none !important;' +
+      '-webkit-backdrop-filter:' + blur + ' !important;' +
+      'backdrop-filter:' + blur + ' !important;}';
+  }
+
   function setImage(dataUrl, save) {
     clearGradientStyles();
     var s = document.documentElement.style;
@@ -138,8 +156,7 @@ function init() {
     s.backgroundPosition = 'center';
     s.backgroundAttachment = 'fixed';
     if (document.body) document.body.style.backgroundColor = 'transparent';
-    injectGradientStyle(css, mid,
-      'background-size:cover !important;background-position:center !important;');
+    injectBarBlurStyle();
     activeMid = mid;
     mode = 'image';
     activeColor = null;
