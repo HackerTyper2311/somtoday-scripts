@@ -130,7 +130,8 @@ function init() {
   /* Image mode: the top bar is one full-width frosted band drawn behind the
      page content. The bar elements themselves stay transparent, so the band
      shows through the whole width instead of stopping at the header's box. */
-  var TOP_BAND_HEIGHT = '80px';
+  /* Covers the top bar (~80px) and the week navigation + day headers (down to ~285px). */
+  var TOP_BAND_HEIGHT = '285px';
 
   function injectBarBlurStyle() {
     var st = document.getElementById(STYLE_ID);
