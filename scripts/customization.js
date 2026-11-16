@@ -539,60 +539,44 @@ function init() {
     return box;
   }
 
-  function tryInjectSettings() {
-    if (document.getElementById(SETTINGS_ID)) return;
-    /* inject into the LAST (topmost) modal; stacked copies would hide the row */
-    var modals = Array.prototype.slice.call(document.querySelectorAll('sl-modal'));
-    var host = modals.length ? modals[modals.length - 1] : document;
-    var all = Array.prototype.slice.call(host.querySelectorAll('sl-weergave'));
-    if (modals.length > 1 && !all.length) return;
-    if (!all.length) all = Array.prototype.slice.call(document.querySelectorAll('sl-weergave'));
-    var wrapper = all.filter(function (w) {
-      return w.getBoundingClientRect().height > 0;
-    }).pop() || all[all.length - 1] || document.querySelector('.weergave-wrapper');
-    if (!wrapper) return;
-    if (!wrapper.querySelector('.blok')) return;
+  /* ============================================================
+   * 5. CUSTOM TAB IN MOD 2.0 SETTINGS
+   * Registers with the loader's public API, so the background
+   * tool gets its own tab next to "SomToday MOD 2.0" instead of
+   * being injected into the Weergave section.
+   * ============================================================ */
+  var TAB_ID = 'bg-customization';
 
-    var blok = Array.prototype.filter.call(
-      wrapper.querySelectorAll('.blok'),
-      function (b) { return b.getClientRects().length > 0; }
-    )[0] || wrapper.querySelector('.blok');
+  function renderTab(panel) {
+    panel.appendChild(el('div', {
+      padding: '8px 24px 12px', fontSize: '13px', lineHeight: '18px',
+      color: 'var(--fg-neutral-moderate, #666)'
+    }, 'Kies een achtergrondkleur of verloop voor Somtoday.'));
 
-    var row = buildSettingsRow();
-    if (blok) {
-      blok.style.flexWrap = 'wrap';
-      var themeBox = blok.querySelector('.container.dark') || blok.querySelector('.container.light');
-      if (themeBox && themeBox.nextSibling) blok.insertBefore(row, themeBox.nextSibling);
-      else if (themeBox) themeBox.after(row);
-      else blok.appendChild(row);
-    } else {
-      wrapper.appendChild(row);
-    }
+    var body = buildSettingsRow();
+    body.style.padding = '6px 24px 16px';
+    panel.appendChild(body);
     updateActiveRing();
   }
 
-  /* Somtoday is a single-page app: keep watching for the settings modal,
-     debounced so it stays cheap. */
-  var pending = false;
-  function check() {
-    pending = false;
-    try {
-      var row = document.getElementById(SETTINGS_ID);
-      var modals = document.querySelectorAll('sl-modal');
-      if (row && modals.length > 1 && row.closest('sl-modal') !== modals[modals.length - 1]) {
-        row.remove();
-      }
-      tryInjectSettings();
-    } catch (e) {
-      console.error('[Somtoday BG] inject error', e);
-    }
+  function registerCustomTab() {
+    var api = window.SomtodayMods;
+    if (!api || typeof api.registerTab !== 'function') return false;
+
+    api.registerTab({
+      id: TAB_ID,
+      label: 'Achtergrond',
+      render: renderTab
+    });
+    return true;
   }
-  new MutationObserver(function () {
-    if (pending) return;
-    pending = true;
-    setTimeout(check, 200);
-  }).observe(document.body, { childList: true, subtree: true });
-  check();
+
+  /* The loader defines SomtodayMods before running mods, but poll briefly
+     in case this file is run on its own. */
+  (function waitForLoader(tries) {
+    if (registerCustomTab() || tries <= 0) return;
+    setTimeout(function () { waitForLoader(tries - 1); }, 300);
+  })(40);
 }
 
   if (document.readyState === 'loading') {
