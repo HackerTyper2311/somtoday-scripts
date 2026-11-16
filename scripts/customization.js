@@ -133,22 +133,29 @@ function init() {
   /* Covers the top bar (~80px) and the week navigation + day headers (down to ~285px). */
   var TOP_BAND_HEIGHT = '285px';
 
-  function injectBarBlurStyle() {
+  function injectBarBlurStyle(dataUrl) {
     var st = document.getElementById(STYLE_ID);
     if (!st) {
       st = document.createElement('style');
       st.id = STYLE_ID;
       (document.head || document.documentElement).appendChild(st);
     }
-    var blur = 'blur(20px) saturate(1.2)';
+    /* The band is a blurred copy of the image itself (filter on the band's own
+       content), so it does not depend on backdrop-filter, which the page's
+       stacking context can block. The band is pinned to the viewport like the
+       page background, so the blurred image lines up with the sharp one. */
+    var pad = 40;
     st.textContent =
       GRADIENT_SELECTORS.join(',') + ',' + BAR_HOSTS.join(',') +
       '{background-color:transparent !important;background-image:none !important;' +
       'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}' +
       BAR_HOSTS.join(',') + ' *{background-color:transparent !important;background-image:none !important;}' +
-      'html::before{content:"";position:fixed;left:0;right:0;top:0;height:' + TOP_BAND_HEIGHT +
-      ';z-index:-1;pointer-events:none;background-color:rgba(24,28,32,.22);' +
-      '-webkit-backdrop-filter:' + blur + ';backdrop-filter:' + blur + ';}';
+      'html::before{content:"";position:fixed;left:-' + pad + 'px;right:-' + pad +
+      'px;top:-' + pad + 'px;height:calc(' + TOP_BAND_HEIGHT + ' + ' + pad + 'px);' +
+      'z-index:-1;pointer-events:none;' +
+      'background-image:linear-gradient(rgba(24,28,32,.22),rgba(24,28,32,.22)),url("' + dataUrl + '");' +
+      'background-size:cover;background-position:center;background-attachment:fixed;' +
+      'filter:blur(20px) saturate(1.2);}';
     flattenShadowBars();
   }
 
@@ -182,7 +189,7 @@ function init() {
     s.backgroundPosition = 'center';
     s.backgroundAttachment = 'fixed';
     if (document.body) document.body.style.backgroundColor = 'transparent';
-    injectBarBlurStyle();
+    injectBarBlurStyle(dataUrl);
     activeMid = mid;
     mode = 'image';
     activeColor = null;
