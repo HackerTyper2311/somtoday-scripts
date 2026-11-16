@@ -26,6 +26,7 @@ function init() {
     '.navigation', '.dagen', 'sl-rooster-tijden', '.vakanties',
     '.week-nummer', '.stack'
   ];
+  var BAR_HOSTS = ['sl-header', 'sl-tab-bar'];
   var activeMid = null;
 
   var PRESETS = [
@@ -141,7 +142,34 @@ function init() {
       '{background-color:' + glass + ' !important;' +
       'background-image:none !important;' +
       '-webkit-backdrop-filter:' + blur + ' !important;' +
-      'backdrop-filter:' + blur + ' !important;}';
+      'backdrop-filter:' + blur + ' !important;}' +
+      BAR_HOSTS.join(',') + ' *{background-color:transparent !important;' +
+      'background-image:none !important;}';
+    flattenShadowBars();
+  }
+
+  /* Custom elements may keep their own background inside a shadow root,
+     which document CSS cannot reach. Give each bar host a shadow style that
+     makes the host the only tinted layer and everything inside it clear. */
+  function flattenShadowBars() {
+    var glass = 'rgba(24,28,32,.22)';
+    var blur = 'blur(20px) saturate(1.2)';
+    var css = ':host{background-color:' + glass + ' !important;' +
+      'background-image:none !important;' +
+      '-webkit-backdrop-filter:' + blur + ' !important;' +
+      'backdrop-filter:' + blur + ' !important;}' +
+      '*{background-color:transparent !important;background-image:none !important;}';
+    document.querySelectorAll(BAR_HOSTS.join(',')).forEach(function (host) {
+      var root = host.shadowRoot;
+      if (!root) return;
+      var st = root.getElementById('somtoday-bg-flat');
+      if (!st) {
+        st = document.createElement('style');
+        st.id = 'somtoday-bg-flat';
+        root.appendChild(st);
+      }
+      if (st.textContent !== css) st.textContent = css;
+    });
   }
 
   function setImage(dataUrl, save) {
@@ -201,6 +229,11 @@ function init() {
     var c = load(STORAGE_KEY);
     if (c) setBg(c, false);
   })();
+
+  /* shadow-root bars can mount late: keep their flat style in place */
+  setInterval(function () {
+    if (mode === 'image') flattenShadowBars();
+  }, 2000);
 
   window.addEventListener('load', reapply);
   setTimeout(reapply, 1500);
