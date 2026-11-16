@@ -127,8 +127,11 @@ function init() {
     updateActiveRing();
   }
 
-  /* In image mode the toolbars/sticky bars become frosted glass: a tinted,
-     translucent layer that blurs whatever image sits behind them. */
+  /* Image mode: the top bar is one full-width frosted band drawn behind the
+     page content. The bar elements themselves stay transparent, so the band
+     shows through the whole width instead of stopping at the header's box. */
+  var TOP_BAND_HEIGHT = '80px';
+
   function injectBarBlurStyle() {
     var st = document.getElementById(STYLE_ID);
     if (!st) {
@@ -136,28 +139,22 @@ function init() {
       st.id = STYLE_ID;
       (document.head || document.documentElement).appendChild(st);
     }
-    var glass = 'rgba(24,28,32,.22)';
     var blur = 'blur(20px) saturate(1.2)';
-    st.textContent = GRADIENT_SELECTORS.join(',') +
-      '{background-color:' + glass + ' !important;' +
-      'background-image:none !important;' +
-      '-webkit-backdrop-filter:' + blur + ' !important;' +
-      'backdrop-filter:' + blur + ' !important;}' +
-      BAR_HOSTS.join(',') + ' *{background-color:transparent !important;' +
-      'background-image:none !important;}';
+    st.textContent =
+      GRADIENT_SELECTORS.join(',') + ',' + BAR_HOSTS.join(',') +
+      '{background-color:transparent !important;background-image:none !important;' +
+      'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}' +
+      BAR_HOSTS.join(',') + ' *{background-color:transparent !important;background-image:none !important;}' +
+      'html::before{content:"";position:fixed;left:0;right:0;top:0;height:' + TOP_BAND_HEIGHT +
+      ';z-index:-1;pointer-events:none;background-color:rgba(24,28,32,.22);' +
+      '-webkit-backdrop-filter:' + blur + ';backdrop-filter:' + blur + ';}';
     flattenShadowBars();
   }
 
-  /* Custom elements may keep their own background inside a shadow root,
-     which document CSS cannot reach. Give each bar host a shadow style that
-     makes the host the only tinted layer and everything inside it clear. */
+  /* Custom-element bars can keep a background inside their shadow root. */
   function flattenShadowBars() {
-    var glass = 'rgba(24,28,32,.22)';
-    var blur = 'blur(20px) saturate(1.2)';
-    var css = ':host{background-color:' + glass + ' !important;' +
-      'background-image:none !important;' +
-      '-webkit-backdrop-filter:' + blur + ' !important;' +
-      'backdrop-filter:' + blur + ' !important;}' +
+    var css = ':host{background-color:transparent !important;background-image:none !important;' +
+      'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}' +
       '*{background-color:transparent !important;background-image:none !important;}';
     document.querySelectorAll(BAR_HOSTS.join(',')).forEach(function (host) {
       var root = host.shadowRoot;
