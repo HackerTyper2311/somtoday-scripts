@@ -170,6 +170,16 @@ function init() {
     return (bottom > 0 ? Math.round(bottom) : parseInt(TOP_BAND_HEIGHT, 10)) + 'px';
   }
 
+  /* The blur belongs to the Rooster tab only. */
+  function onRoosterTab() {
+    return /\/rooster/.test(location.pathname) && !!document.querySelector('.headers-container');
+  }
+
+  function updateGlassVisibility() {
+    var g = document.getElementById(GLASS_ID);
+    if (g) g.style.display = onRoosterTab() ? '' : 'none';
+  }
+
   function updateGlassHeight() {
     var g = document.getElementById(GLASS_ID);
     if (g) g.style.height = glassHeight();
@@ -187,6 +197,7 @@ function init() {
       'position:fixed;left:0;right:0;top:0;height:' + glassHeight() + ';' +
       'z-index:8;pointer-events:none;background-color:rgba(24,28,32,.22);' +
       '-webkit-backdrop-filter:' + blur + ';backdrop-filter:' + blur + ';';
+    updateGlassVisibility();
   }
 
   /* Custom-element bars can keep a background inside their shadow root. */
@@ -270,6 +281,7 @@ function init() {
     if (mode === 'image') {
       flattenShadowBars();
       updateGlassHeight();
+      updateGlassVisibility();
     }
   }, 300);
   window.addEventListener('resize', updateGlassHeight);
