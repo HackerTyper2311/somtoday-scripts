@@ -4,7 +4,7 @@
     /*
      * ============================================================
      * SOMTODAY SCHOOL CHAT
-     * Versie: 2.10.2
+     * Versie: 2.10.3
      * ============================================================
      */
 
@@ -21,7 +21,7 @@
 
     const CONFIG = {
 
-        version: "2.10.2",
+        version: "2.10.3",
 
         publishKey: "demo",
         subscribeKey: "demo",
@@ -47,8 +47,8 @@
 
         // Profanity-filter
         profanityEnabled: true,      // hoofdschakelaar
-        profanityLocal: true,        // laag 1: lokaal filter
-        profanityExternal: true,     // laag 2: profanity.dev
+        profanityLocal: true,        // laag 1: lokaal filter (Nederlands + Engels)
+        profanityExternal: false,    // laag 2: profanity.dev (alleen Engels, geeft valse positieven zoals "hoe")
         profanityApi: "https://vector.profanity.dev",
         profanityTimeout: 3000,
         profanityFailClosed: false,  // true = blokkeren als externe check faalt
@@ -312,11 +312,11 @@
     const PROFANITY_EXACT = new Set([
 
         // Nederlands
-        "kut", "lul", "hoer", "fok", "fuk", "shi", "gvd", "kkr",
-        "piemel", "pimel", "dick", "dik", "dih", "cuck", "cock", "fag", "vagina",
+        "kut", "lul", "hoer", "fok", "fuk", "gvd", "kkr",
+        "piemel", "pimel", "cuck", "cock", "fag",
 
         // Engels
-        "fck", "fk", "fuck", "shit", "bitch", "suck",
+        "fck", "fk", "fuck", "shit", "bitch",
 
         // Seksueel getinte termen
         "goon", "gooner", "gooning", "gogoon", "gogooning", "sperma", "sperm",
@@ -326,7 +326,7 @@
 
     ].map(squashRepeats));
 
-    // Substring-matches: alleen lange, herkenbare termen
+    // Substring-matches: alleen lange, herkenbare termen (per woord gecontroleerd)
     const PROFANITY_CONTAINS = [
 
         // Nederlands
@@ -347,7 +347,7 @@
 
     /*
      * Controleert woorden op scheldwoorden, ook als ze zijn opgeknipt
-     * ("k u t", "f-u-c-k", "k.u.t") of aan elkaar zijn geplakt.
+     * ("k u t", "f-u-c-k", "k.u.t") of aan elkaar zijn geplakt binnen één woord.
      */
     function profanityIn(tokens) {
 
@@ -385,10 +385,11 @@
             }
         }
 
-        // 3. Alles aan elkaar, ook over woordgrenzen heen
-        const compact = squashRepeats(tokens.join(""));
-
-        return PROFANITY_CONTAINS.some(term => compact.includes(term));
+        // 3. Substrings, per woord (niet over woordgrenzen heen)
+        return tokens.some(token => {
+            const word = squashRepeats(token);
+            return PROFANITY_CONTAINS.some(term => word.includes(term));
+        });
     }
 
     function containsProfanityLocal(text) {
@@ -411,15 +412,16 @@
     ]);
 
     // Topleveldomeinen die los als "com" of "nl" worden getypt
+    // (bewust kort: "net", "me", "be" en "co" zijn gewone Nederlandse woorden)
     const TLDS = new Set([
-        "com", "nl", "net", "org", "io", "xyz", "gg", "tv", "me",
-        "be", "co", "app", "site", "ly"
+        "com", "nl", "io", "gg", "tv", "ly", "xyz", "site", "app", "org"
     ]);
 
     /*
      * True als de tekst een link is of erop lijkt:
      * - een domein met punt ("youtube.com")
      * - een platformnaam met een tld, slash of @ ("youtube com", "youtube / @naam")
+     * Een gewone punt telt niet als linkteken.
      */
     function containsLink(text) {
 
@@ -440,7 +442,7 @@
         }
 
         const hasTld = tokens.some(t => TLDS.has(t));
-        const hasLinkSymbol = /[\/@.]/.test(raw);
+        const hasLinkSymbol = /[\/@]/.test(raw);
 
         return hasTld || hasLinkSymbol;
     }
@@ -576,7 +578,7 @@
     }
 
     // ============================================================
-    // PROFANITY: LAAG 2 (EXTERN)
+    // PROFANITY: LAAG 2 (EXTERN, UIT — ENGELS, GEEFT VALSE POSITIEVEN)
     // ============================================================
 
     /*
@@ -1461,7 +1463,7 @@
 
             setStatus("Controleren...");
 
-            // Externe controle
+            // Externe controle (uit, tenzij profanityExternal aan staat)
             if (CONFIG.profanityEnabled && await externalBlocks(text)) {
                 setStatus("Bericht bevat ongepast taalgebruik");
                 return;
